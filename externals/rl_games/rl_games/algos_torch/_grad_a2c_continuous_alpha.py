@@ -82,6 +82,9 @@ class GradA2CAgent(A2CAgent):
             self.actor_lr = float(config['gi_params']["actor_learning_rate_alpha"])
             self.actor_iterations = config['gi_params']['actor_iterations_alpha']
             
+        self.max_actor_lr = 1e-1
+        self.min_actor_lr = 1e-5
+            
         self.critic_lr = float(config['gi_params']["critic_learning_rate"])
         
         self.actor_optimizer = torch.optim.Adam(self.actor.parameters(), betas = config['gi_params']['betas'], lr = self.actor_lr)
@@ -98,6 +101,7 @@ class GradA2CAgent(A2CAgent):
         self.gi_max_alpha = float(config['gi_params']['max_alpha'])
         self.gi_min_alpha = float(config['gi_params']['min_alpha'])
         self.gi_curr_alpha = float(config['gi_params']['desired_alpha'])
+        self.gi_desired_alpha = self.gi_curr_alpha
         self.gi_alpha_factor = 1.05
 
         # initialize ppo optimizer;
@@ -146,14 +150,15 @@ class GradA2CAgent(A2CAgent):
         # set learning rate;
         if self.gi_lr_schedule == 'linear':
             actor_lr = (1e-5 - self.actor_lr) * float(self.epoch_num / self.max_epochs) + self.actor_lr
-            for param_group in self.actor_optimizer.param_groups:
-                param_group['lr'] = actor_lr
             critic_lr = (1e-5 - self.critic_lr) * float(self.epoch_num / self.max_epochs) + self.critic_lr
-            for param_group in self.critic_optimizer.param_groups:
-                param_group['lr'] = critic_lr
         else:
             actor_lr = self.actor_lr
             critic_lr = self.critic_lr
+        
+        for param_group in self.actor_optimizer.param_groups:
+            param_group['lr'] = actor_lr
+        for param_group in self.critic_optimizer.param_groups:
+            param_group['lr'] = critic_lr
 
         self.writer.add_scalar("info/gi_actor_lr", actor_lr, self.epoch_num)
         self.writer.add_scalar("info/gi_critic_lr", critic_lr, self.epoch_num)
@@ -525,8 +530,6 @@ class GradA2CAgent(A2CAgent):
             actor_loss_ratio = actor_loss_1 / actor_loss_0
             self.writer.add_scalar("info_alpha/actor_loss_ratio", actor_loss_ratio, self.epoch_num)
             
-            
-            
             with torch.no_grad():
                 
                 _, mu, std, _ = self.actor.forward_with_dist(t_obses)
@@ -539,75 +542,68 @@ class GradA2CAgent(A2CAgent):
                 
                 self.writer.add_scalar("info_alpha/attained_alpha", attained_alpha, self.epoch_num)
             
+                attained_alpha_ratio = torch.abs(attained_alpha - self.gi_curr_alpha) / self.gi_curr_alpha
+                self.writer.add_scalar("info_alpha/attained_alpha_ratio", attained_alpha_ratio, self.epoch_num)
+            
+            
+            with torch.no_grad():
+            
+                # estimate determinant of (I + alpha * advantage Hessian)
+                # and use it to safely bound alpha;
+                
+                old_mu, old_std = self.experience_buffer.tensor_dict['mus'], \
+                                    self.experience_buffer.tensor_dict['sigmas']
+                                    
+                old_mu, old_std = swap_and_flatten01(old_mu), swap_and_flatten01(old_std)
+                                    
+                _, new_mu, new_std, _ = self.actor.forward_with_dist(t_obses)
+                
+            preupdate_action_eps_jac = self.action_eps_jacobian(old_mu, old_std, t_rp_eps)
+            postupdate_action_eps_jac = self.action_eps_jacobian(new_mu, new_std, t_rp_eps)
+            
+            preupdate_action_eps_jacdet = torch.logdet(preupdate_action_eps_jac)
+            postupdate_action_eps_jacdet = torch.logdet(postupdate_action_eps_jac)
+            
+            est_hessian_logdet = postupdate_action_eps_jacdet - preupdate_action_eps_jacdet
+            
+            mean_est_hessian_det = torch.mean(torch.exp(est_hessian_logdet))
+            
+            self.writer.add_scalar("info_alpha/mean_est_hessian_det", mean_est_hessian_det, self.epoch_num)
+            
             if self.gi_algorithm == 'dynamic-alpha-only':
                 
-                # if actor_loss_ratio > 1., reduce alpha;
-                if False: # actor_loss_ratio > 1.:
+                if actor_loss_ratio > 1.:
                     
                     self.gi_curr_alpha /= self.gi_alpha_factor
+                    self.actor_lr /= self.gi_alpha_factor
                     
                 else:
                     
-                    if False: # attained_alpha < 0.:
+                    if attained_alpha_ratio > 0.5:
                         
-                        # if attained alpha is negative value, reduce alpha;
+                        if attained_alpha < self.gi_curr_alpha:
+                            
+                            self.actor_lr *= self.gi_alpha_factor
+                            
+                        else:
+                            
+                            self.actor_lr /= self.gi_alpha_factor
+                        
+                    if mean_est_hessian_det < 0.95 or mean_est_hessian_det > 1.05:
+                            
+                        # if estimated determinant of (I + alpha * advantage Hessian)
+                        # is too small or large, which means unstable update, reduce alpha;
+                        
                         self.gi_curr_alpha /= self.gi_alpha_factor
                         
                     else:
+                        
+                        self.gi_curr_alpha *= self.gi_alpha_factor
                 
-                        with torch.no_grad():
-                        
-                            # estimate determinant of (I + alpha * advantage Hessian)
-                            # and use it to safely bound alpha;
-                            
-                            old_mu, old_std = self.experience_buffer.tensor_dict['mus'], \
-                                                self.experience_buffer.tensor_dict['sigmas']
-                                                
-                            old_mu, old_std = swap_and_flatten01(old_mu), swap_and_flatten01(old_std)
-                                                
-                            _, new_mu, new_std, _ = self.actor.forward_with_dist(t_obses)
-                            
-                        preupdate_action_eps_jac = self.action_eps_jacobian(old_mu, old_std, t_rp_eps)
-                        postupdate_action_eps_jac = self.action_eps_jacobian(new_mu, new_std, t_rp_eps)
-                        
-                        preupdate_action_eps_jacdet = torch.logdet(preupdate_action_eps_jac)
-                        postupdate_action_eps_jacdet = torch.logdet(postupdate_action_eps_jac)
-                        
-                        # preupdate_action_eps_jacdet = torch.clamp(preupdate_action_eps_jacdet, min=1e-6)
-                        est_hessian_logdet = postupdate_action_eps_jacdet - preupdate_action_eps_jacdet
-                        
-                        mean_est_hessian_det = torch.mean(torch.exp(est_hessian_logdet))
-                        
-                        self.writer.add_scalar("info_alpha/mean_est_hessian_det", mean_est_hessian_det, self.epoch_num)
-                        
-                        # action_dim = old_mu.shape[1]
-                        # tmp0 = est_hessian_logdet / action_dim
-                        # n_alpha = torch.min(attained_alpha / torch.abs(torch.exp(tmp0) - 1.))
-                                    
-                        # self.writer.add_scalar("info_alpha/n_alpha", n_alpha, self.epoch_num)
-                        
-                        # if mean_update_rates > 1.:
-                            
-                        #     self.gi_curr_alpha /= 2. # self.gi_alpha_factor
-                            
-                        # else:
-                            
-                        #     self.gi_curr_alpha *= self.gi_alpha_factor
-                        
-                        # if n_alpha > self.gi_curr_alpha:
-                            
-                        #     self.gi_curr_alpha *= self.gi_alpha_factor
-                            
-                        #     if self.gi_curr_alpha > n_alpha:
-                                
-                        #         self.gi_curr_alpha = n_alpha
-                            
-                        # else:
-                            
-                        #     self.gi_curr_alpha /= self.gi_alpha_factor
-                            
-            self.gi_curr_alpha = np.clip(self.gi_curr_alpha, self.gi_min_alpha, self.gi_max_alpha)
-        
+                self.actor_lr = np.clip(self.actor_lr, self.min_actor_lr, self.max_actor_lr)
+                self.gi_curr_alpha = np.clip(self.gi_curr_alpha, self.gi_min_alpha, self.gi_max_alpha)
+                    
+            self.writer.add_scalar("info_alpha/actor_lr", self.actor_lr, self.epoch_num)
             self.writer.add_scalar("info_alpha/alpha", self.gi_curr_alpha, self.epoch_num)
                 
         # update critic;
@@ -971,6 +967,18 @@ class GradA2CAgent(A2CAgent):
     
     def action_eps_jacobian(self, mu, sigma, eps):
         
+        jacobian = torch.zeros((eps.shape[0], eps.shape[1], eps.shape[1]))
+        
+        for d in range(eps.shape[1]):
+            
+            if sigma.ndim == 1:
+                jacobian[:, d, d] = sigma[d].detach()
+            elif sigma.ndim == 2:
+                jacobian[:, d, d] = sigma[:, d].detach()
+            
+        return jacobian
+        
+        '''
         distr = GradNormal(mu, sigma)
         eps.requires_grad = True
         actions = distr.eps_to_action(eps)
@@ -984,3 +992,5 @@ class GradA2CAgent(A2CAgent):
             jacobian[:, d, :] = grad
             
         return jacobian
+        '''
+        
