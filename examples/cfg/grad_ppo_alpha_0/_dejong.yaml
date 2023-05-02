@@ -1,19 +1,19 @@
 params:  
   diff_env:
-    name: CheetahEnv
-    stochastic_env: True
-    episode_length: 1000
-    MM_caching_frequency: 16
+    name: DejongEnv
+    stochastic_env: False
+    episode_length: 1
+    MM_caching_frequency: 1
 
   algo:
-    name: grad_a2c_continuous_backup
+    name: grad_a2c_continuous_alpha
 
   model:
     name: continuous_a2c_logstd
 
   network:
     name: actor_critic
-    separate: False
+    separate: True
     space:
       continuous:
         mu_activation: None
@@ -26,7 +26,7 @@ params:
           val: 0
         fixed_sigma: True
     mlp:
-      units: [128, 64, 32]
+      units: [64, 64]
       activation: elu
       d2rl: False
       
@@ -36,19 +36,20 @@ params:
         name: None
 
   load_checkpoint: False
-  load_path: nn/df_ant_ppo.pth
+  load_path: nn/df_dejong.pth
 
   config:
-    name: df_cheetah_grad_ppo_backup
+    device: cpu
+    name: df_dejong
     env_name: dflex
     multi_gpu: False
     ppo: True
     mixed_precision: False
     normalize_input: True
-    normalize_value: True
+    normalize_value: False
     reward_shaper:
       scale_value: 0.01
-    normalize_advantage: False
+    normalize_advantage: True
     gamma: 0.99
     tau: 0.95
     learning_rate: 3e-4
@@ -56,30 +57,38 @@ params:
     lr_threshold: 0.008
     kl_threshold: 0.008
     score_to_win: 20000
-    max_epochs: 1000
-    save_best_after: 100
-    save_frequency: 400
+    max_epochs: 200
+    save_best_after: 50
+    save_frequency: 100
     grad_norm: 1.0
     entropy_coef: 0.0
     truncate_grads: True
     e_clip: 0.2
+    steps_num: 1
     num_actors: 1024
-    steps_num: 32
-    minibatch_size: 8192
-    mini_epochs: 5
+    minibatch_size: 1024
+    mini_epochs: 64
     critic_coef: 4
     clip_value: True
     seq_len: 4
     bounds_loss_coef: 0.0001
-    
-    # grad informed
-    gi_max_alpha: 0.1
-    gi_max_alpha_schedule: identity
-    gi_alpha_strategy: 8
-    gi_step_num: 32
 
+    defer_summaries_sec: 0.001
+    summaries_interval_sec_min: 0.001
+    summaries_interval_sec_max: 0.002
+
+    # grad informed
+
+    defer_summaries_sec: 0.001
+    summaries_interval_sec_min: 0.001
+    summaries_interval_sec_max: 0.002
+
+    gi_params:      
+      num_step: 1
+      
     player:
+      # render: True
       determenistic: True
-      games_num: 1
-      num_actors: 1
+      games_num: 12
+      num_actors: 4
       print_stats: True

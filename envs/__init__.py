@@ -16,6 +16,7 @@ from envs.humanoid import HumanoidEnv
 from envs._ackley import AckleyEnv
 from envs._rosenbrock import RosenbrockEnv
 from envs._dejong import DejongEnv
+from envs._test import TestEnv
 
 from envs.traffic.pace_car.env import TrafficPaceCarEnv
 from envs.traffic.roundabout.env import TrafficRoundaboutEnv

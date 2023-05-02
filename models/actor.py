@@ -7,7 +7,8 @@
 
 import torch
 import torch.nn as nn
-from torch.distributions.normal import Normal
+# from torch.distributions.normal import Normal
+from externals.rl_games.rl_games.algos_torch._grad_distribution import GradNormal
 import numpy as np
 
 from models import model_utils
@@ -90,26 +91,29 @@ class ActorStochasticMLP(nn.Module):
             std = self.logstd.exp() # (num_actions)
             # eps = torch.randn((*obs.shape[:-1], std.shape[-1])).to(self.device)
             # sample = mu + eps * std
-            dist = Normal(mu, std)
+            dist = GradNormal(mu, std)
             sample = dist.rsample()
             return sample
     
     def forward_with_dist(self, obs, deterministic = False):
         mu = self.mu_net(obs)
         std = self.logstd.exp() # (num_actions)
-
+        
+        dist = GradNormal(mu, std)
+        eps = dist.sample_eps()
+        
         if deterministic:
-            return mu, mu, std
-        else:
-            dist = Normal(mu, std)
-            sample = dist.rsample()
-            return sample, mu, std
+            eps = eps.zero_()
+            
+        sample = dist.eps_to_action(eps)
+        
+        return sample, mu, std, eps
         
     def evaluate_actions_log_probs(self, obs, actions):
         mu = self.mu_net(obs)
 
         std = self.logstd.exp()
-        dist = Normal(mu, std)
+        dist = GradNormal(mu, std)
 
         return dist.log_prob(actions)
 

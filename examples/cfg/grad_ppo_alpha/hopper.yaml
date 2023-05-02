@@ -1,6 +1,6 @@
 params:  
   diff_env:
-    name: AntEnv
+    name: HopperEnv
     stochastic_env: True
     episode_length: 1000
     MM_caching_frequency: 16
@@ -36,11 +36,11 @@ params:
         name: None
 
   load_checkpoint: False
-  load_path: nn/df_ant.pth
+  load_path: nn/df_hopper.pth
 
   config:
     device: cpu
-    name: df_ant_gradppo
+    name: df_hopper_gradppo
     env_name: dflex
     multi_gpu: False
     ppo: True
@@ -65,7 +65,7 @@ params:
     truncate_grads: True
     e_clip: 0.2
     steps_num: 32
-    num_actors: 64
+    num_actors: 256
     minibatch_size: 2048
     mini_epochs: 5
     critic_coef: 4
@@ -92,15 +92,15 @@ params:
       algorithm: 'dynamic-alpha-only'
       # algorithm: 'grad-ppo'
 
-      max_alpha: 4e-1
+      max_alpha: 2e-1
       min_alpha: 1e-3
-      desired_alpha: 1e-2
+      desired_alpha: 1e-1
 
       # THESE ARE THE REAL NETWORKS WE ARE GOING TO USE;
       network:
         actor: ActorStochasticMLP # ActorDeterministicMLP
         actor_mlp:
-          units: [64, 64]
+          units: [128, 64, 32]
           activation: elu
         actor_logstd_init: -1.0
 
@@ -109,12 +109,12 @@ params:
           units: [64, 64]
           activation: elu
 
-      lr_schedule: linear # [constant, linear]
+      lr_schedule: constant # [constant, linear]
       
       # LEARNING RATE FOR RP-GRADIENT BASED ACTOR UPDATE;
       actor_learning_rate_shac: 1e-2 # 4e-2
       
-      actor_learning_rate_alpha: 1e-4
+      actor_learning_rate_alpha: 4e-4
       actor_iterations_alpha: 16
 
       # LEARNING RATE FOR CRITIC UPDATE;

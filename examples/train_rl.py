@@ -149,7 +149,6 @@ def get_args(): # TODO: delve into the arguments
         {"name": "--logdir", "type": str, "default": "logs/tmp/rl/"},
         {"name": "--no-time-stamp", "action": "store_true", "default": False,
             "help": "whether not add time stamp at the log path"},
-        {"name": "--gi_alpha", "type": float, "default": 0.1},
         {"name": "--ppo_lr_threshold", "type": float, "default": 0.008},
         {"name": "--ppo_kl_threshold", "type": float, "default": 0.008},]
 
@@ -182,7 +181,6 @@ if __name__ == '__main__':
 
     # alpha
     if "gi_params" in cfg_train["params"]["config"].keys():
-        cfg_train["params"]["config"]["gi_params"]["alpha"] = args.gi_alpha
         cfg_train["params"]["config"]["gi_params"]["seed"] = args.seed
 
     # ppo thresh

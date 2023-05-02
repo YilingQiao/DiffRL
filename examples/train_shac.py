@@ -98,7 +98,8 @@ if __name__ == '__main__':
     if not args.no_time_stamp:
         args.logdir = os.path.join(args.logdir, get_time_stamp())
     
-    args.device = torch.device(args.device)
+    # @BUGFIX: if we use 'cpu', line 2128 of adjoint.py conflicts;
+    # args.device = torch.device(args.device)
 
     vargs = vars(args)
 

@@ -1,9 +1,9 @@
 params:  
   diff_env:
-    name: AntEnv
-    stochastic_env: True
-    episode_length: 1000
-    MM_caching_frequency: 16
+    name: TestEnv
+    stochastic_env: False
+    episode_length: 10
+    MM_caching_frequency: 1
 
   algo:
     name: grad_a2c_continuous_alpha
@@ -13,7 +13,7 @@ params:
 
   network:
     name: actor_critic
-    separate: False
+    separate: True
     space:
       continuous:
         mu_activation: None
@@ -23,7 +23,7 @@ params:
           name: default
         sigma_init:
           name: const_initializer
-          val: 0
+          val: 0.0
         fixed_sigma: True
     mlp:
       units: [64, 64]
@@ -36,40 +36,40 @@ params:
         name: None
 
   load_checkpoint: False
-  load_path: nn/df_ant.pth
+  load_path: nn/df_test.pth
 
   config:
     device: cpu
-    name: df_ant_gradppo
+    name: df_test
     env_name: dflex
     multi_gpu: False
     ppo: True
     mixed_precision: False
-    normalize_input: True
+    normalize_input: False
     normalize_value: False
     reward_shaper:
       scale_value: 0.01
-    normalize_advantage: True
+    normalize_advantage: False
     gamma: 0.99
     tau: 0.95
-    learning_rate: 0.0
+    learning_rate: 1e-3
     lr_schedule: constant
     lr_threshold: 0.008
     kl_threshold: 0.008
     score_to_win: 20000
-    max_epochs: 500
+    max_epochs: 200
     save_best_after: 50
     save_frequency: 100
     grad_norm: 1.0
     entropy_coef: 0.0
-    truncate_grads: True
+    truncate_grads: False
     e_clip: 0.2
     steps_num: 32
     num_actors: 64
     minibatch_size: 2048
-    mini_epochs: 5
+    mini_epochs: 64
     critic_coef: 4
-    clip_value: True
+    clip_value: False
     seq_len: 4
     bounds_loss_coef: 0.0001
 
@@ -83,47 +83,8 @@ params:
     summaries_interval_sec_min: 0.001
     summaries_interval_sec_max: 0.002
 
-    gi_params:
-      
+    gi_params:      
       num_step: 32
-      # algorithm: 'shac-only' 
-      # algorithm: 'ppo-only'
-      # algorithm: 'static-alpha-only'
-      algorithm: 'dynamic-alpha-only'
-      # algorithm: 'grad-ppo'
-
-      max_alpha: 4e-1
-      min_alpha: 1e-3
-      desired_alpha: 1e-2
-
-      # THESE ARE THE REAL NETWORKS WE ARE GOING TO USE;
-      network:
-        actor: ActorStochasticMLP # ActorDeterministicMLP
-        actor_mlp:
-          units: [64, 64]
-          activation: elu
-        actor_logstd_init: -1.0
-
-        critic: CriticMLP
-        critic_mlp:
-          units: [64, 64]
-          activation: elu
-
-      lr_schedule: linear # [constant, linear]
-      
-      # LEARNING RATE FOR RP-GRADIENT BASED ACTOR UPDATE;
-      actor_learning_rate_shac: 1e-2 # 4e-2
-      
-      actor_learning_rate_alpha: 1e-4
-      actor_iterations_alpha: 16
-
-      # LEARNING RATE FOR CRITIC UPDATE;
-      critic_learning_rate: 2e-3
-      critic_iterations: 16
-      critic_num_batch: 4
-      target_critic_alpha: 0.2
-      
-      betas: [0.7, 0.95] # adam
       
     player:
       # render: True
