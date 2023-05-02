@@ -103,6 +103,10 @@ class GradA2CAgent(A2CAgent):
         self.gi_curr_alpha = float(config['gi_params']['desired_alpha'])
         self.gi_desired_alpha = self.gi_curr_alpha
         self.gi_alpha_factor = 1.05
+        
+        self.gi_actor_loss_ratio_list = []
+        self.gi_actor_loss_actor_lr_list = []
+        self.gi_actor_loss_list_size = 16
 
         # initialize ppo optimizer;
 
@@ -528,23 +532,16 @@ class GradA2CAgent(A2CAgent):
                     actor_loss_1 = actor_loss.detach().cpu().item()
                     
             actor_loss_ratio = actor_loss_1 / actor_loss_0
+            
+            if len(self.gi_actor_loss_ratio_list) == self.gi_actor_loss_list_size:
+                self.gi_actor_loss_ratio_list.pop(0)
+            if len(self.gi_actor_loss_actor_lr_list) == self.gi_actor_loss_list_size:
+                self.gi_actor_loss_actor_lr_list.pop(0)
+                
+            self.gi_actor_loss_ratio_list.append(actor_loss_ratio)
+            self.gi_actor_loss_actor_lr_list.append(self.actor_lr)
+            
             self.writer.add_scalar("info_alpha/actor_loss_ratio", actor_loss_ratio, self.epoch_num)
-            
-            with torch.no_grad():
-                
-                _, mu, std, _ = self.actor.forward_with_dist(t_obses)
-                
-                distr = GradNormal(mu, std)
-                rpeps_actions = distr.eps_to_action(t_rp_eps)
-                residual = rpeps_actions - t_actions
-                
-                attained_alpha = torch.mean(residual / t_adv_gradient)
-                
-                self.writer.add_scalar("info_alpha/attained_alpha", attained_alpha, self.epoch_num)
-            
-                attained_alpha_ratio = torch.abs(attained_alpha - self.gi_curr_alpha) / self.gi_curr_alpha
-                self.writer.add_scalar("info_alpha/attained_alpha_ratio", attained_alpha_ratio, self.epoch_num)
-            
             
             with torch.no_grad():
             
@@ -572,36 +569,59 @@ class GradA2CAgent(A2CAgent):
             
             if self.gi_algorithm == 'dynamic-alpha-only':
                 
+                curr_alpha = self.gi_curr_alpha
+                curr_actor_lr = self.actor_lr
+                
                 if actor_loss_ratio > 1.:
                     
-                    self.gi_curr_alpha /= self.gi_alpha_factor
-                    self.actor_lr /= self.gi_alpha_factor
+                    next_alpha = curr_alpha / self.gi_alpha_factor
+                    next_actor_lr = curr_actor_lr / self.gi_alpha_factor
                     
                 else:
                     
-                    if attained_alpha_ratio > 0.5:
+                    # if len(self.gi_actor_loss_ratio_list) == self.gi_actor_loss_list_size and \
+                    #     len(self.gi_actor_loss_actor_lr_list) == self.gi_actor_loss_list_size:
+                            
+                    #     num_half = self.gi_actor_loss_list_size // 2
+                    #     actor_loss_ratio_mean_0 = np.mean(self.gi_actor_loss_ratio_list[:num_half])
+                    #     actor_loss_ratio_mean_1 = np.mean(self.gi_actor_loss_ratio_list[num_half:])
+                    #     actor_loss_lr_mean_0 = np.mean(self.gi_actor_loss_actor_lr_list[:num_half])
+                    #     actor_loss_lr_mean_1 = np.mean(self.gi_actor_loss_actor_lr_list[num_half:])
                         
-                        if attained_alpha < self.gi_curr_alpha:
-                            
-                            self.actor_lr *= self.gi_alpha_factor
-                            
-                        else:
-                            
-                            self.actor_lr /= self.gi_alpha_factor
+                    #     if actor_loss_ratio_mean_0 > actor_loss_ratio_mean_1:
+                    #         if actor_loss_lr_mean_0 > actor_loss_lr_mean_1:
+                    #             self.actor_lr /= self.gi_alpha_factor
+                    #         else:
+                    #             self.actor_lr *= self.gi_alpha_factor   
+                    #     else:
+                    #         if actor_loss_lr_mean_0 > actor_loss_lr_mean_1:
+                    #             self.actor_lr *= self.gi_alpha_factor
+                    #         else:
+                    #             self.actor_lr /= self.gi_alpha_factor
                         
                     if mean_est_hessian_det < 0.95 or mean_est_hessian_det > 1.05:
                             
                         # if estimated determinant of (I + alpha * advantage Hessian)
                         # is too small or large, which means unstable update, reduce alpha;
                         
-                        self.gi_curr_alpha /= self.gi_alpha_factor
+                        next_alpha = curr_alpha / self.gi_alpha_factor
+                        next_actor_lr = curr_actor_lr / self.gi_alpha_factor
                         
                     else:
                         
-                        self.gi_curr_alpha *= self.gi_alpha_factor
+                        next_alpha = curr_alpha * self.gi_alpha_factor
+                        next_actor_lr = curr_actor_lr * self.gi_alpha_factor
                 
-                self.actor_lr = np.clip(self.actor_lr, self.min_actor_lr, self.max_actor_lr)
-                self.gi_curr_alpha = np.clip(self.gi_curr_alpha, self.gi_min_alpha, self.gi_max_alpha)
+                next_alpha = np.clip(next_alpha, self.gi_min_alpha, self.gi_max_alpha)
+                next_actor_lr = np.clip(next_actor_lr, self.min_actor_lr, self.max_actor_lr)
+                
+                if next_alpha == self.gi_min_alpha or next_alpha == self.gi_max_alpha:
+                    next_actor_lr = curr_actor_lr
+                elif next_actor_lr == self.min_actor_lr or next_actor_lr == self.max_actor_lr:
+                    next_alpha = curr_alpha
+                    
+                self.gi_curr_alpha = next_alpha
+                self.actor_lr = next_actor_lr
                     
             self.writer.add_scalar("info_alpha/actor_lr", self.actor_lr, self.epoch_num)
             self.writer.add_scalar("info_alpha/alpha", self.gi_curr_alpha, self.epoch_num)
