@@ -82,9 +82,6 @@ class GradA2CAgent(A2CAgent):
             self.actor_lr = float(config['gi_params']["actor_learning_rate_alpha"])
             self.actor_iterations = config['gi_params']['actor_iterations_alpha']
             
-        self.max_actor_lr = 1e-1
-        self.min_actor_lr = 1e-5
-            
         self.critic_lr = float(config['gi_params']["critic_learning_rate"])
         
         self.actor_optimizer = torch.optim.Adam(self.actor.parameters(), betas = config['gi_params']['betas'], lr = self.actor_lr)
@@ -100,14 +97,11 @@ class GradA2CAgent(A2CAgent):
         
         self.gi_max_alpha = float(config['gi_params']['max_alpha'])
         self.gi_min_alpha = float(config['gi_params']['min_alpha'])
-        self.gi_curr_alpha = float(config['gi_params']['desired_alpha'])
-        self.gi_desired_alpha = self.gi_curr_alpha
-        self.gi_alpha_factor = 1.05
+        self.gi_desired_alpha = float(config['gi_params']['desired_alpha'])
+        self.gi_curr_alpha = self.gi_desired_alpha
+        self.gi_update_factor = float(config['gi_params']['update_factor'])
+        self.gi_update_interval = float(config['gi_params']['update_interval'])
         
-        self.gi_actor_loss_ratio_list = []
-        self.gi_actor_loss_actor_lr_list = []
-        self.gi_actor_loss_list_size = 16
-
         # initialize ppo optimizer;
 
         self.ppo_last_lr = self.last_lr
@@ -532,15 +526,6 @@ class GradA2CAgent(A2CAgent):
                     actor_loss_1 = actor_loss.detach().cpu().item()
                     
             actor_loss_ratio = actor_loss_1 / actor_loss_0
-            
-            if len(self.gi_actor_loss_ratio_list) == self.gi_actor_loss_list_size:
-                self.gi_actor_loss_ratio_list.pop(0)
-            if len(self.gi_actor_loss_actor_lr_list) == self.gi_actor_loss_list_size:
-                self.gi_actor_loss_actor_lr_list.pop(0)
-                
-            self.gi_actor_loss_ratio_list.append(actor_loss_ratio)
-            self.gi_actor_loss_actor_lr_list.append(self.actor_lr)
-            
             self.writer.add_scalar("info_alpha/actor_loss_ratio", actor_loss_ratio, self.epoch_num)
             
             with torch.no_grad():
@@ -574,51 +559,31 @@ class GradA2CAgent(A2CAgent):
                 
                 if actor_loss_ratio > 1.:
                     
-                    next_alpha = curr_alpha / self.gi_alpha_factor
-                    next_actor_lr = curr_actor_lr / self.gi_alpha_factor
+                    next_alpha = curr_alpha / self.gi_update_factor
+                    next_actor_lr = curr_actor_lr / self.gi_update_factor
                     
                 else:
                     
-                    # if len(self.gi_actor_loss_ratio_list) == self.gi_actor_loss_list_size and \
-                    #     len(self.gi_actor_loss_actor_lr_list) == self.gi_actor_loss_list_size:
-                            
-                    #     num_half = self.gi_actor_loss_list_size // 2
-                    #     actor_loss_ratio_mean_0 = np.mean(self.gi_actor_loss_ratio_list[:num_half])
-                    #     actor_loss_ratio_mean_1 = np.mean(self.gi_actor_loss_ratio_list[num_half:])
-                    #     actor_loss_lr_mean_0 = np.mean(self.gi_actor_loss_actor_lr_list[:num_half])
-                    #     actor_loss_lr_mean_1 = np.mean(self.gi_actor_loss_actor_lr_list[num_half:])
-                        
-                    #     if actor_loss_ratio_mean_0 > actor_loss_ratio_mean_1:
-                    #         if actor_loss_lr_mean_0 > actor_loss_lr_mean_1:
-                    #             self.actor_lr /= self.gi_alpha_factor
-                    #         else:
-                    #             self.actor_lr *= self.gi_alpha_factor   
-                    #     else:
-                    #         if actor_loss_lr_mean_0 > actor_loss_lr_mean_1:
-                    #             self.actor_lr *= self.gi_alpha_factor
-                    #         else:
-                    #             self.actor_lr /= self.gi_alpha_factor
-                        
-                    if mean_est_hessian_det < 0.95 or mean_est_hessian_det > 1.05:
+                    min_safe_interval = (1. - self.gi_update_interval)
+                    max_safe_interval = (1. + self.gi_update_interval)
+                    if mean_est_hessian_det < min_safe_interval or \
+                        mean_est_hessian_det > max_safe_interval:
                             
                         # if estimated determinant of (I + alpha * advantage Hessian)
                         # is too small or large, which means unstable update, reduce alpha;
                         
-                        next_alpha = curr_alpha / self.gi_alpha_factor
-                        next_actor_lr = curr_actor_lr / self.gi_alpha_factor
+                        next_alpha = curr_alpha / self.gi_update_factor
+                        next_actor_lr = curr_actor_lr / self.gi_update_factor
                         
                     else:
                         
-                        next_alpha = curr_alpha * self.gi_alpha_factor
-                        next_actor_lr = curr_actor_lr * self.gi_alpha_factor
+                        next_alpha = curr_alpha * self.gi_update_factor
+                        next_actor_lr = curr_actor_lr * self.gi_update_factor
                 
                 next_alpha = np.clip(next_alpha, self.gi_min_alpha, self.gi_max_alpha)
-                next_actor_lr = np.clip(next_actor_lr, self.min_actor_lr, self.max_actor_lr)
                 
                 if next_alpha == self.gi_min_alpha or next_alpha == self.gi_max_alpha:
                     next_actor_lr = curr_actor_lr
-                elif next_actor_lr == self.min_actor_lr or next_actor_lr == self.max_actor_lr:
-                    next_alpha = curr_alpha
                     
                 self.gi_curr_alpha = next_alpha
                 self.actor_lr = next_actor_lr
@@ -682,7 +647,8 @@ class GradA2CAgent(A2CAgent):
                     batch_cnt += 1
                 
                 critic_loss = (total_critic_loss / batch_cnt).detach().cpu().item()
-                print('value iter {}/{}, loss = {:7.6f}'.format(j + 1, self.critic_iterations, critic_loss), end='\r')
+                if self.print_stats:
+                    print('value iter {}/{}, loss = {:7.6f}'.format(j + 1, self.critic_iterations, critic_loss), end='\r')
 
         # update target critic;
         with torch.no_grad():

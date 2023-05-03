@@ -1,4 +1,4 @@
-name: shac
+name: gradppo
 channels:
   - pytorch
   - defaults
@@ -12,3 +12,5 @@ dependencies:
     - tensorboardx==2.5
     - urdfpy==0.0.22
     - usd-core==22.3
+    - optuna==3.1.1
+    - optuna-dashboard==0.9.1

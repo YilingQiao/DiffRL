@@ -95,6 +95,8 @@ params:
       max_alpha: 1e-1
       min_alpha: 1e-3
       desired_alpha: 1e-2
+      update_factor: 1.05
+      update_interval: 0.05
 
       # THESE ARE THE REAL NETWORKS WE ARE GOING TO USE;
       network:
@@ -102,7 +104,6 @@ params:
         actor_mlp:
           units: [64, 64]
           activation: elu
-        actor_logstd_init: -1.0
 
         critic: CriticMLP
         critic_mlp:
