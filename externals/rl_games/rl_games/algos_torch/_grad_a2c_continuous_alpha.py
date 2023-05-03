@@ -525,6 +525,7 @@ class GradA2CAgent(A2CAgent):
                 elif iter == self.actor_iterations - 1:
                     actor_loss_1 = actor_loss.detach().cpu().item()
                     
+            actor_loss_0 = np.clip(actor_loss_0, 1e-5)
             actor_loss_ratio = actor_loss_1 / actor_loss_0
             self.writer.add_scalar("info_alpha/actor_loss_ratio", actor_loss_ratio, self.epoch_num)
             
