@@ -156,7 +156,7 @@ def objective(trial):
     cfg_train["params"]["config"]["gi_params"]["algorithm"] = "dynamic-alpha-only"
     
     # alpha;
-    alpha = trial.suggest_categorical("alpha", ["5e-2", "2e-2", "1e-2", "5e-3", "2e-3", "1e-3"])
+    alpha = trial.suggest_categorical("alpha", ["5e-1", "2e-1", "1e-1", "5e-2", "2e-2", "1e-2", "5e-3", "2e-3", "1e-3"])
     alpha = float(alpha)
     cfg_train["params"]["config"]["gi_params"]["max_alpha"] = alpha * 10.
     cfg_train["params"]["config"]["gi_params"]["min_alpha"] = alpha / 10.
@@ -176,6 +176,10 @@ def objective(trial):
     update_interval = trial.suggest_categorical("update_interval", ["0.02", "0.05", "0.10", "0.15", "0.20", "0.30", "0.40"])
     update_interval = float(update_interval)
     cfg_train["params"]["config"]["gi_params"]["update_interval"] = update_interval
+    
+    # static or dynamic actor lr;
+    static_actor_lr = trial.suggest_categorical("static_actor_lr", [True, False])
+    cfg_train["params"]["config"]["gi_params"]["static_actor_lr"] = static_actor_lr
     
     # 1. initialize runner;
     
@@ -306,7 +310,7 @@ if __name__ == '__main__':
     args.num_envs = 0           # default;
     args.play = False           # only training;
     args.render = False         # no rendering;
-    args.logdir = f"optuna/logs/{args.env}/dynamic_alpha/"
+    args.logdir = f"optuna/logs/{args.env}/dynamic_alpha_static_actor_lr_2/"
     args.cfg = f"./examples/cfg/grad_ppo_alpha/{args.env}.yaml"
     args.no_time_stamp = False  # add time stamp to log files;
     device = args.rl_device
@@ -339,7 +343,7 @@ if __name__ == '__main__':
     
     optuna.logging.get_logger("optuna").addHandler(logging.StreamHandler(sys.stdout))
 
-    study_name = f"dynamic-alpha-{args.env}"  # Unique identifier of the study.
+    study_name = f"dynamic-alpha-static-actor-lr-2-{args.env}"  # Unique identifier of the study.
     
     if not os.path.exists("./optuna/db"):
         os.makedirs("./optuna/db")
