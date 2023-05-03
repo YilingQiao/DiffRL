@@ -331,6 +331,7 @@ if __name__ == '__main__':
         
     if args.num_epoch > 0:
         cfg_train["params"]["config"]["max_epochs"] = args.num_epoch
+        num_epoch = cfg_train["params"]["config"]["max_epochs"]
 
     # save config
     if cfg_train['params']['general']['train']:
@@ -351,7 +352,7 @@ if __name__ == '__main__':
 
     sampler = optuna.samplers.TPESampler()
     pruner = optuna.pruners.MedianPruner(n_startup_trials=5,    # start pruning after at least 5 trials;
-                                        n_warmup_steps=50,      # prune after at least 50 epochs;
+                                        n_warmup_steps=num_epoch // 2,      # prune after at least 50% of epochs;
                                         n_min_trials=3)         # test same setting with at least 3 different seeds;
 
     study = optuna.create_study(study_name=study_name, 
