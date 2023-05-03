@@ -97,7 +97,7 @@ params:
       desired_alpha: 1e-2
       update_factor: 1.05
       update_interval: 0.05
-      static_actor_lr: True
+      actor_lr_scheduler: dynamic1
 
       # THESE ARE THE REAL NETWORKS WE ARE GOING TO USE;
       network:

@@ -177,9 +177,9 @@ def objective(trial):
     update_interval = float(update_interval)
     cfg_train["params"]["config"]["gi_params"]["update_interval"] = update_interval
     
-    # static or dynamic actor lr;
-    static_actor_lr = trial.suggest_categorical("static_actor_lr", [True, False])
-    cfg_train["params"]["config"]["gi_params"]["static_actor_lr"] = static_actor_lr
+    # actor lr scheduler;
+    actor_lr_scheduler = trial.suggest_categorical("actor_lr_scheduler", ["static", "dynamic0", "dynamic1"])
+    cfg_train["params"]["config"]["gi_params"]["actor_lr_scheduler"] = actor_lr_scheduler
     
     # 1. initialize runner;
     
@@ -310,7 +310,7 @@ if __name__ == '__main__':
     args.num_envs = 0           # default;
     args.play = False           # only training;
     args.render = False         # no rendering;
-    args.logdir = f"optuna/logs/{args.env}/dynamic_alpha_version_3/"
+    args.logdir = f"optuna/logs/{args.env}/dynamic_alpha_version_4/"
     args.cfg = f"./examples/cfg/grad_ppo_alpha/{args.env}.yaml"
     args.no_time_stamp = False  # add time stamp to log files;
     device = args.rl_device
@@ -343,7 +343,7 @@ if __name__ == '__main__':
     
     optuna.logging.get_logger("optuna").addHandler(logging.StreamHandler(sys.stdout))
 
-    study_name = f"dynamic-alpha-version-3-{args.env}"  # Unique identifier of the study.
+    study_name = f"dynamic-alpha-version-4-{args.env}"  # Unique identifier of the study.
     
     if not os.path.exists("./optuna/db"):
         os.makedirs("./optuna/db")

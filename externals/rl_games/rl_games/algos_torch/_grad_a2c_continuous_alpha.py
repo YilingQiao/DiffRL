@@ -101,7 +101,8 @@ class GradA2CAgent(A2CAgent):
         self.gi_curr_alpha = self.gi_desired_alpha
         self.gi_update_factor = float(config['gi_params']['update_factor'])
         self.gi_update_interval = float(config['gi_params']['update_interval'])
-        self.gi_static_actor_lr = config["gi_params"]["static_actor_lr"]
+        self.gi_actor_lr_scheduler = config["gi_params"]["actor_lr_scheduler"]
+        assert self.gi_actor_lr_scheduler in ["static", "dynamic0", "dynamic1"]
         
         # initialize ppo optimizer;
 
@@ -564,8 +565,12 @@ class GradA2CAgent(A2CAgent):
                 
                 if actor_loss_ratio > 1.:
                     
-                    next_alpha = curr_alpha / self.gi_update_factor
-                    next_actor_lr = curr_actor_lr / self.gi_update_factor
+                    if self.gi_actor_lr_scheduler in ["static", "dynamic0"]:
+                        next_alpha = curr_alpha / self.gi_update_factor
+                        next_actor_lr = curr_actor_lr / self.gi_update_factor
+                    else:
+                        next_alpha = curr_alpha
+                        next_actor_lr = curr_actor_lr / self.gi_update_factor
                     
                 else:
                     
@@ -577,13 +582,21 @@ class GradA2CAgent(A2CAgent):
                         # if estimated determinant of (I + alpha * advantage Hessian)
                         # is too small or large, which means unstable update, reduce alpha;
                         
-                        next_alpha = curr_alpha / self.gi_update_factor
-                        next_actor_lr = curr_actor_lr / self.gi_update_factor
+                        if self.gi_actor_lr_scheduler in ["static", "dynamic0"]:
+                            next_alpha = curr_alpha / self.gi_update_factor
+                            next_actor_lr = curr_actor_lr / self.gi_update_factor
+                        else:
+                            next_alpha = curr_alpha / self.gi_update_factor
+                            next_actor_lr = curr_actor_lr
                         
                     else:
                         
-                        next_alpha = curr_alpha * self.gi_update_factor
-                        next_actor_lr = curr_actor_lr * self.gi_update_factor
+                        if self.gi_actor_lr_scheduler in ["static", "dynamic0"]:
+                            next_alpha = curr_alpha * self.gi_update_factor
+                            next_actor_lr = curr_actor_lr * self.gi_update_factor
+                        else:
+                            next_alpha = curr_alpha * self.gi_update_factor
+                            next_actor_lr = curr_actor_lr
                 
                 next_alpha = np.clip(next_alpha, self.gi_min_alpha, self.gi_max_alpha)
                 
@@ -591,7 +604,7 @@ class GradA2CAgent(A2CAgent):
                     next_actor_lr = curr_actor_lr
                     
                 self.gi_curr_alpha = next_alpha
-                if not self.gi_static_actor_lr:
+                if self.gi_actor_lr_scheduler != "static":
                     self.actor_lr = next_actor_lr
                     
             self.writer.add_scalar("info_alpha/actor_lr", self.actor_lr, self.epoch_num)
