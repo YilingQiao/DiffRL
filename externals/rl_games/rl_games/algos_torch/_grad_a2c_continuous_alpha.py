@@ -147,7 +147,10 @@ class GradA2CAgent(A2CAgent):
 
         # set learning rate;
         if self.gi_lr_schedule == 'linear':
-            actor_lr = (1e-5 - self.actor_lr) * float(self.epoch_num / self.max_epochs) + self.actor_lr
+            if self.gi_algorithm == "shac-only":
+                actor_lr = (1e-5 - self.actor_lr) * float(self.epoch_num / self.max_epochs) + self.actor_lr
+            else:
+                actor_lr = self.actor_lr
             critic_lr = (1e-5 - self.critic_lr) * float(self.epoch_num / self.max_epochs) + self.critic_lr
         else:
             actor_lr = self.actor_lr
@@ -556,12 +559,12 @@ class GradA2CAgent(A2CAgent):
             if self.gi_algorithm == 'dynamic-alpha-only':
                 
                 curr_alpha = self.gi_curr_alpha
-                curr_actor_lr = self.actor_lr
+                # curr_actor_lr = self.actor_lr
                 
                 if actor_loss_ratio > 1.:
                     
                     next_alpha = curr_alpha / self.gi_update_factor
-                    next_actor_lr = curr_actor_lr / self.gi_update_factor
+                    # next_actor_lr = curr_actor_lr / self.gi_update_factor
                     
                 else:
                     
@@ -574,22 +577,22 @@ class GradA2CAgent(A2CAgent):
                         # is too small or large, which means unstable update, reduce alpha;
                         
                         next_alpha = curr_alpha / self.gi_update_factor
-                        next_actor_lr = curr_actor_lr / self.gi_update_factor
+                        # next_actor_lr = curr_actor_lr / self.gi_update_factor
                         
                     else:
                         
                         next_alpha = curr_alpha * self.gi_update_factor
-                        next_actor_lr = curr_actor_lr * self.gi_update_factor
+                        # next_actor_lr = curr_actor_lr * self.gi_update_factor
                 
                 next_alpha = np.clip(next_alpha, self.gi_min_alpha, self.gi_max_alpha)
                 
-                if next_alpha == self.gi_min_alpha or next_alpha == self.gi_max_alpha:
-                    next_actor_lr = curr_actor_lr
+                # if next_alpha == self.gi_min_alpha or next_alpha == self.gi_max_alpha:
+                #     next_actor_lr = curr_actor_lr
                     
                 self.gi_curr_alpha = next_alpha
-                self.actor_lr = next_actor_lr
+                # self.actor_lr = next_actor_lr
                     
-            self.writer.add_scalar("info_alpha/actor_lr", self.actor_lr, self.epoch_num)
+            # self.writer.add_scalar("info_alpha/actor_lr", self.actor_lr, self.epoch_num)
             self.writer.add_scalar("info_alpha/alpha", self.gi_curr_alpha, self.epoch_num)
                 
         # update critic;

@@ -156,7 +156,7 @@ def objective(trial):
     cfg_train["params"]["config"]["gi_params"]["algorithm"] = "dynamic-alpha-only"
     
     # alpha;
-    alpha = trial.suggest_categorical("alpha", ["5e-1", "2e-1", "1e-1", "5e-2", "2e-2", "1e-2", "5e-3", "2e-3", "1e-3"])
+    alpha = trial.suggest_categorical("alpha", ["5e-2", "2e-2", "1e-2", "5e-3", "2e-3", "1e-3"])
     alpha = float(alpha)
     cfg_train["params"]["config"]["gi_params"]["max_alpha"] = alpha * 10.
     cfg_train["params"]["config"]["gi_params"]["min_alpha"] = alpha / 10.
@@ -168,7 +168,7 @@ def objective(trial):
     cfg_train["params"]["config"]["gi_params"]["actor_learning_rate_alpha"] = actor_lr
     
     # update factor;
-    update_factor = trial.suggest_categorical("update_factor", ["1.01", "1.02", "1.05", "1.1", "1.2", "1.5", "2.0"])
+    update_factor = trial.suggest_categorical("update_factor", ["1.01", "1.02", "1.05", "1.1", "1.2"])
     update_factor = float(update_factor)
     cfg_train["params"]["config"]["gi_params"]["update_factor"] = update_factor
     
