@@ -64,23 +64,27 @@ class GradA2CAgent(A2CAgent):
         # ppo-only: Only update policy using PPO
         # static-alpha-only: Update policy using alpha-policy as target policy, fixed alpha;
         # dynamic-alpha-only: Update policy using alpha-policy as target policy, dynamic alpha;
-        # grad-ppo: Update policy using mixture of dynamic alpha policy and PPO
+        # grad-ppo-shac: Mixture of shac and ppo, simply take shac update and do PPO update;
+        # grad-ppo-alpha: Update policy using mixture of dynamic alpha policy and PPO
         self.gi_algorithm = config['gi_params']['algorithm']
-        assert self.gi_algorithm in ["shac-only", "ppo-only", "static-alpha-only", "dynamic-alpha-only", "grad-ppo"], "Invalid algorithm"
+        assert self.gi_algorithm in ["shac-only", "ppo-only", "static-alpha-only", "dynamic-alpha-only", "grad-ppo-shac", "grad-ppo-alpha"], "Invalid algorithm"
     
-        # initialize optimizer;
+        # initialize optimizer for RP policy update;
 
-        if self.gi_algorithm == "shac-only":
+        if self.gi_algorithm in ['shac-only', 'grad-ppo-shac']:
 
             self.actor_lr = float(config['gi_params']["actor_learning_rate_shac"])
             self.actor_iterations = 1
 
-        elif self.gi_algorithm == "static-alpha-only" or \
-                self.gi_algorithm == "dynamic-alpha-only" or \
-                self.gi_algorithm == "grad-ppo":
+        elif self.gi_algorithm in ['static-alpha-only', 'dynamic-alpha-only', 'grad-ppo-alpha']:
 
             self.actor_lr = float(config['gi_params']["actor_learning_rate_alpha"])
             self.actor_iterations = config['gi_params']['actor_iterations_alpha']
+            
+        else:
+            
+            self.actor_lr = 0.
+            self.actor_iterations = 0
             
         self.critic_lr = float(config['gi_params']["critic_learning_rate"])
         
@@ -103,6 +107,9 @@ class GradA2CAgent(A2CAgent):
         self.gi_update_interval = float(config['gi_params']['update_interval'])
         self.gi_actor_lr_scheduler = config["gi_params"]["actor_lr_scheduler"]
         assert self.gi_actor_lr_scheduler in ["static", "dynamic0", "dynamic1"]
+        
+        self.next_alpha = self.gi_curr_alpha
+        self.next_actor_lr = self.actor_lr
         
         # initialize ppo optimizer;
 
@@ -149,7 +156,7 @@ class GradA2CAgent(A2CAgent):
 
         # set learning rate;
         if self.gi_lr_schedule == 'linear':
-            if self.gi_algorithm == "shac-only":
+            if self.gi_algorithm in ['shac-only', 'grad-ppo-shac']:
                 actor_lr = (1e-5 - self.actor_lr) * float(self.epoch_num / self.max_epochs) + self.actor_lr
             else:
                 actor_lr = self.actor_lr
@@ -192,8 +199,7 @@ class GradA2CAgent(A2CAgent):
         if self.is_rnn:
             raise NotImplementedError()
         
-        if self.gi_algorithm == "ppo-only" or \
-            self.gi_algorithm == "grad-ppo":
+        if self.gi_algorithm in ['ppo-only', 'grad-ppo-shac', 'grad-ppo-alpha']:
 
             for _ in range(0, self.mini_epochs_num):
 
@@ -241,6 +247,14 @@ class GradA2CAgent(A2CAgent):
         play_time = play_time_end - play_time_start
         update_time = update_time_end - update_time_start
         total_time = update_time_end - play_time_start
+        
+        # update (rp) alpha and actor lr;
+        
+        self.gi_curr_alpha = self.next_alpha
+        self.actor_lr = self.next_actor_lr
+        
+        self.writer.add_scalar("info_alpha/actor_lr", self.actor_lr, self.epoch_num)
+        self.writer.add_scalar("info_alpha/alpha", self.gi_curr_alpha, self.epoch_num)
 
         return batch_dict['step_time'], play_time, update_time, total_time, a_losses, c_losses, b_losses, entropies, kls, last_lr, lr_mul
 
@@ -603,12 +617,11 @@ class GradA2CAgent(A2CAgent):
                 if next_alpha == self.gi_min_alpha or next_alpha == self.gi_max_alpha:
                     next_actor_lr = curr_actor_lr
                     
-                self.gi_curr_alpha = next_alpha
-                if self.gi_actor_lr_scheduler != "static":
-                    self.actor_lr = next_actor_lr
+                if self.gi_actor_lr_scheduler == "static":
+                    next_actor_lr = curr_actor_lr
                     
-            self.writer.add_scalar("info_alpha/actor_lr", self.actor_lr, self.epoch_num)
-            self.writer.add_scalar("info_alpha/alpha", self.gi_curr_alpha, self.epoch_num)
+                self.next_alpha = next_alpha
+                self.next_actor_lr = next_actor_lr
                 
         # update critic;
         if True:
@@ -770,31 +783,58 @@ class GradA2CAgent(A2CAgent):
                 advantages = (advantages - advantages.mean()) / (advantages.std() + 1e-8)
 
         # compute [mus] and [sigmas] again here because we could have
-        # updated policy in [play_steps], these terms will be used to
-        # compute KL div of updated policies, which could be used to
-        # control learning rate later;
-        with torch.no_grad():
-            n_mus, n_sigmas = self.actor.forward_dist(obses)
-            if n_sigmas.ndim == 1:
-                n_sigmas = n_sigmas.unsqueeze(0)                      
-                n_sigmas = n_sigmas.expand(mus.shape[0], -1).clone()
-            
-            n_neglogpacs = self.neglogp(actions, n_mus, n_sigmas, torch.log(n_sigmas))
-
+        # updated policy in [play_steps] using RP gradients;
+        # find out if the updated policy is still close enough to the
+        # original policy, because PPO assumes it;
+        # if it is not close enough, we decrease [alpha];
+        
+        if self.gi_algorithm == "grad-ppo":
+        
+            with torch.no_grad():
+                n_mus, n_sigmas = self.actor.forward_dist(obses)
+                if n_sigmas.ndim == 1:
+                    n_sigmas = n_sigmas.unsqueeze(0)                      
+                    n_sigmas = n_sigmas.expand(mus.shape[0], -1).clone()
+                
+                n_neglogpacs = self.neglogp(actions, n_mus, n_sigmas, torch.log(n_sigmas))
+                
+                # find out distance between current policy and old policy;
+                
+                pac_ratio = torch.exp(torch.clamp(neglogpacs - n_neglogpacs, max=16.))  # prevent [inf];
+                out_of_range_pac_ratio = torch.logical_or(pac_ratio > (1. - self.e_clip), 
+                                                          pac_ratio < (1. + self.e_clip))
+                out_of_range_pac_ratio = torch.count_nonzero(out_of_range_pac_ratio) / actions.shape[0]
+                        
+                # find out if current policy is better than old policy in terms of lr gradients;
+                
+                est_curr_performance = torch.sum(advantages * pac_ratio)
+                
+                # if current policy is too far from old policy or is worse than old policy,
+                # decrease alpha;
+                
+                if out_of_range_pac_ratio > self.max_dist_rp_lr or \
+                    est_curr_performance < 0.:
+                    
+                    self.next_alpha = self.gi_curr_alpha / self.gi_update_factor
+                    if self.gi_actor_lr_scheduler == "dynamic0":
+                        self.next_actor_lr = self.actor_lr / self.gi_update_factor
+                
+                dataset_dict['mu'] = n_mus
+                dataset_dict['sigma'] = n_sigmas
+                dataset_dict['logp_actions'] = n_neglogpacs
+                
         dataset_dict = {}
         dataset_dict['old_values'] = values
-        dataset_dict['old_logp_actions'] = neglogpacs
         dataset_dict['advantages'] = advantages
         dataset_dict['actions'] = actions
         dataset_dict['obs'] = obses
         dataset_dict['rnn_states'] = rnn_states
         dataset_dict['rnn_masks'] = rnn_masks
+        
         dataset_dict['old_mu'] = mus
         dataset_dict['old_sigma'] = sigmas
-        dataset_dict['mu'] = n_mus
-        dataset_dict['sigma'] = n_sigmas
-        dataset_dict['initial_ratio'] = torch.ones_like(neglogpacs) # torch.exp(neglogpacs - n_neglogpacs)
-
+        dataset_dict['old_logp_actions'] = neglogpacs
+        
         self.dataset.update_values_dict(dataset_dict)
 
         if self.has_central_value:
