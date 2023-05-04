@@ -148,7 +148,7 @@ def get_args(): # TODO: delve into the arguments
 
 def objective(trial):
 
-    cfg_train['params']['general']['logdir'] = os.path.join(cfg_train['params']['general']['logdir'], f"trial_{trial.number}")
+    cfg_train['params']['general']['logdir'] = os.path.join(vargs['logdir'], f"trial_{trial.number}")
     
     # 0. set hyperparameter search space;
     seed = np.random.randint(0, 1000)
