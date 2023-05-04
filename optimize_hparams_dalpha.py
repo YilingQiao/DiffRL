@@ -16,8 +16,6 @@ from rl_games.common import env_configurations, experiment, vecenv
 from rl_games.torch_runner import Runner
 from utils.common import *
 
-device = 'cpu'
-
 def create_dflex_env(**kwargs):
     env_fn = getattr(envs, cfg_train["params"]["diff_env"]["name"])
 
@@ -149,6 +147,8 @@ def get_args(): # TODO: delve into the arguments
     return args
 
 def objective(trial):
+
+    cfg_train['params']['general']['logdir'] = os.path.join(vargs['logdir'], f"trial_{trial.number}")
     
     # 0. set hyperparameter search space;
     seed = np.random.randint(0, 1000)
@@ -180,6 +180,13 @@ def objective(trial):
     # actor lr scheduler;
     actor_lr_scheduler = trial.suggest_categorical("actor_lr_scheduler", ["static", "dynamic0", "dynamic1"])
     cfg_train["params"]["config"]["gi_params"]["actor_lr_scheduler"] = actor_lr_scheduler
+
+    # save config
+    if cfg_train['params']['general']['train']:
+        log_dir = cfg_train["params"]["general"]["logdir"]
+        os.makedirs(log_dir, exist_ok = True)
+        # save config
+        yaml.dump(cfg_train, open(os.path.join(log_dir, 'cfg.yaml'), 'w'))
     
     # 1. initialize runner;
     
@@ -310,18 +317,19 @@ if __name__ == '__main__':
     args.num_envs = 0           # default;
     args.play = False           # only training;
     args.render = False         # no rendering;
-    args.logdir = f"optuna/logs/{args.env}/dynamic_alpha_version_4/"
+    args.logdir = f"optuna/logs/{args.env}/dynamic_alpha_version_4_gpu/"
     args.cfg = f"./examples/cfg/grad_ppo_alpha/{args.env}.yaml"
     args.no_time_stamp = False  # add time stamp to log files;
-    device = args.rl_device
 
-    global cfg_train, vargs
+    global cfg_train, vargs, device
+
+    device = args.rl_device
     
     with open(args.cfg, 'r') as f:
         cfg_train = yaml.load(f, Loader=yaml.SafeLoader)
 
-    if not args.no_time_stamp:
-        args.logdir = os.path.join(args.logdir, get_time_stamp())
+    # if not args.no_time_stamp:
+    #     args.logdir = os.path.join(args.logdir, get_time_stamp())
         
     vargs = vars(args)
     
@@ -331,20 +339,15 @@ if __name__ == '__main__':
         
     if args.num_epoch > 0:
         cfg_train["params"]["config"]["max_epochs"] = args.num_epoch
-        num_epoch = cfg_train["params"]["config"]["max_epochs"]
+    num_epoch = cfg_train["params"]["config"]["max_epochs"]
 
-    # save config
-    if cfg_train['params']['general']['train']:
-        log_dir = cfg_train["params"]["general"]["logdir"]
-        os.makedirs(log_dir, exist_ok = True)
-        # save config
-        yaml.dump(cfg_train, open(os.path.join(log_dir, 'cfg.yaml'), 'w'))
-        
+    cfg_train['params']['config']['device'] = device
+    
     # add stream handler of stdout to show the messages;
     
     optuna.logging.get_logger("optuna").addHandler(logging.StreamHandler(sys.stdout))
 
-    study_name = f"dynamic-alpha-version-4-{args.env}"  # Unique identifier of the study.
+    study_name = f"dynamic-alpha-version-4-gpu-{args.env}"  # Unique identifier of the study.
     
     if not os.path.exists("./optuna/db"):
         os.makedirs("./optuna/db")
