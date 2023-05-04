@@ -100,13 +100,19 @@ class GradA2CAgent(A2CAgent):
         self.gi_lr_schedule = config['gi_params']['lr_schedule']
         
         self.gi_max_alpha = float(config['gi_params']['max_alpha'])
-        self.gi_min_alpha = float(config['gi_params']['min_alpha'])
+        self.gi_min_alpha = 1e-5
         self.gi_desired_alpha = float(config['gi_params']['desired_alpha'])
         self.gi_curr_alpha = self.gi_desired_alpha
         self.gi_update_factor = float(config['gi_params']['update_factor'])
         self.gi_update_interval = float(config['gi_params']['update_interval'])
-        self.gi_actor_lr_scheduler = config["gi_params"]["actor_lr_scheduler"]
-        assert self.gi_actor_lr_scheduler in ["static", "dynamic0", "dynamic1"]
+        self.gi_dynamic_alpha_scheduler = config["gi_params"]["dynamic_alpha_scheduler"]
+        # alpha and actor_lr scheduler for dynamic-alpha policy
+        # static_lr: actor lr does not change, only alpha changes
+        # dynamic0: actor lr changes same as alpha (alpha decreases when actor loss does not decrease)
+        # dynamic1: actor lr only decreases when actor loss does not decrease (alpha does not decrease when actor loss does not decrease)
+        # dynamic2: est_hessian_det should not exceed 1. + dynamic0
+        # dynamic3: est_hessian_det should not exceed 1. + dynamic1
+        assert self.gi_dynamic_alpha_scheduler in ["static_lr", "dynamic0", "dynamic1", "dynamic2", "dynamic3"]
         
         self.next_alpha = self.gi_curr_alpha
         self.next_actor_lr = self.actor_lr
@@ -172,6 +178,11 @@ class GradA2CAgent(A2CAgent):
 
         self.writer.add_scalar("info/gi_actor_lr", actor_lr, self.epoch_num)
         self.writer.add_scalar("info/gi_critic_lr", critic_lr, self.epoch_num)
+        
+        # rp actor lr and alpha;
+        
+        self.writer.add_scalar("info_alpha/actor_lr", self.actor_lr, self.epoch_num)
+        self.writer.add_scalar("info_alpha/alpha", self.gi_curr_alpha, self.epoch_num)
 
         # collect experience;
         if self.is_rnn:
@@ -252,9 +263,6 @@ class GradA2CAgent(A2CAgent):
         
         self.gi_curr_alpha = self.next_alpha
         self.actor_lr = self.next_actor_lr
-        
-        self.writer.add_scalar("info_alpha/actor_lr", self.actor_lr, self.epoch_num)
-        self.writer.add_scalar("info_alpha/alpha", self.gi_curr_alpha, self.epoch_num)
 
         return batch_dict['step_time'], play_time, update_time, total_time, a_losses, c_losses, b_losses, entropies, kls, last_lr, lr_mul
 
@@ -548,6 +556,27 @@ class GradA2CAgent(A2CAgent):
             actor_loss_ratio = actor_loss_1 / actor_loss_0
             self.writer.add_scalar("info_alpha/actor_loss_ratio", actor_loss_ratio, self.epoch_num)
             
+            # find out attained alpha, which can be different from our desired alpha;
+            # for only statistics;
+            with torch.no_grad():
+                
+                _, mu, std, _ = self.actor.forward_with_dist(t_obses)
+                
+                distr = GradNormal(mu, std)
+                rpeps_actions = distr.eps_to_action(t_rp_eps)
+                
+                attained_alpha = (rpeps_actions - t_actions) / t_adv_gradient
+                attained_alpha = torch.mean(attained_alpha, dim=-1)
+                attained_alpha, _ = torch.sort(attained_alpha)
+                attained_alpha = attained_alpha.detach().cpu().numpy()
+                
+                # only use median values to cull out noises;
+                attained_alpha_len = attained_alpha.shape[0] // 4
+                attained_alpha = attained_alpha[attained_alpha_len:-attained_alpha_len]
+                attained_alpha = np.mean(attained_alpha)
+                
+            self.writer.add_scalar("info_alpha/attained_alpha", attained_alpha, self.epoch_num)
+                
             with torch.no_grad():
             
                 # estimate determinant of (I + alpha * advantage Hessian)
@@ -572,53 +601,93 @@ class GradA2CAgent(A2CAgent):
             
             self.writer.add_scalar("info_alpha/mean_est_hessian_det", mean_est_hessian_det, self.epoch_num)
             
-            if self.gi_algorithm == 'dynamic-alpha-only':
+            if self.gi_algorithm in ['dynamic-alpha-only', 'grad-ppo-alpha']:
                 
                 curr_alpha = self.gi_curr_alpha
                 curr_actor_lr = self.actor_lr
                 
-                if actor_loss_ratio > 1.:
+                next_alpha = curr_alpha
+                next_actor_lr = curr_actor_lr
+                
+                min_safe_interval = (1. - self.gi_update_interval)
+                max_safe_interval = (1. + self.gi_update_interval)
+                
+                if self.gi_dynamic_alpha_scheduler == 'static_lr':
                     
-                    if self.gi_actor_lr_scheduler in ["static", "dynamic0"]:
+                    if actor_loss_ratio > 1.:
                         next_alpha = curr_alpha / self.gi_update_factor
+                    else:
+                        if mean_est_hessian_det < min_safe_interval or \
+                            mean_est_hessian_det > max_safe_interval:
+                            # if estimated determinant of (I + alpha * advantage Hessian)
+                            # is too small or large, which means unstable update, reduce alpha;
+                            next_alpha = curr_alpha / self.gi_update_factor
+                        else:
+                            next_alpha = curr_alpha * self.gi_update_factor
+                            
+                elif self.gi_dynamic_alpha_scheduler == 'dynamic0':
+                    
+                    if actor_loss_ratio > 1.:
+                        next_alpha = curr_alpha / self.gi_update_factor
+                    else:
+                        if mean_est_hessian_det < min_safe_interval or \
+                            mean_est_hessian_det > max_safe_interval:
+                            next_alpha = curr_alpha / self.gi_update_factor
+                        else:
+                            next_alpha = curr_alpha * self.gi_update_factor
+                            
+                    next_alpha = np.clip(next_alpha, self.gi_min_alpha, self.gi_max_alpha)
+                    ratio = next_alpha / np.clip(curr_alpha, 1e-5, None)
+                    next_actor_lr = curr_actor_lr * ratio
+                    
+                elif self.gi_dynamic_alpha_scheduler == 'dynamic1':
+                    
+                    if actor_loss_ratio > 1.:
+                        # alpha does not change;
                         next_actor_lr = curr_actor_lr / self.gi_update_factor
                     else:
-                        next_alpha = curr_alpha
+                        # actor_lr does not change;
+                        if mean_est_hessian_det < min_safe_interval or \
+                            mean_est_hessian_det > max_safe_interval:
+                            next_alpha = curr_alpha / self.gi_update_factor
+                        else:
+                            next_alpha = curr_alpha * self.gi_update_factor
+                    
+                    next_alpha = np.clip(next_alpha, self.gi_min_alpha, self.gi_max_alpha)
+                    
+                elif self.gi_dynamic_alpha_scheduler == 'dynamic2':
+                    
+                    if actor_loss_ratio > 1.:
+                        next_alpha = curr_alpha / self.gi_update_factor
+                    else:
+                        if mean_est_hessian_det < min_safe_interval or \
+                            mean_est_hessian_det > 1.:
+                            next_alpha = curr_alpha / self.gi_update_factor
+                        else:
+                            next_alpha = curr_alpha * self.gi_update_factor
+                            
+                    next_alpha = np.clip(next_alpha, self.gi_min_alpha, self.gi_max_alpha)
+                    ratio = next_alpha / np.clip(curr_alpha, 1e-5, None)
+                    next_actor_lr = curr_actor_lr * ratio
+                    
+                elif self.gi_dynamic_alpha_scheduler == 'dynamic3':
+                    
+                    if actor_loss_ratio > 1.:
+                        # alpha does not change;
                         next_actor_lr = curr_actor_lr / self.gi_update_factor
+                    else:
+                        # actor_lr does not change;
+                        if mean_est_hessian_det < min_safe_interval or \
+                            mean_est_hessian_det > 1.:
+                            next_alpha = curr_alpha / self.gi_update_factor
+                        else:
+                            next_alpha = curr_alpha * self.gi_update_factor
+                    
+                    next_alpha = np.clip(next_alpha, self.gi_min_alpha, self.gi_max_alpha)
                     
                 else:
                     
-                    min_safe_interval = (1. - self.gi_update_interval)
-                    max_safe_interval = (1. + self.gi_update_interval)
-                    if mean_est_hessian_det < min_safe_interval or \
-                        mean_est_hessian_det > max_safe_interval:
-                            
-                        # if estimated determinant of (I + alpha * advantage Hessian)
-                        # is too small or large, which means unstable update, reduce alpha;
-                        
-                        if self.gi_actor_lr_scheduler in ["static", "dynamic0"]:
-                            next_alpha = curr_alpha / self.gi_update_factor
-                            next_actor_lr = curr_actor_lr / self.gi_update_factor
-                        else:
-                            next_alpha = curr_alpha / self.gi_update_factor
-                            next_actor_lr = curr_actor_lr
-                        
-                    else:
-                        
-                        if self.gi_actor_lr_scheduler in ["static", "dynamic0"]:
-                            next_alpha = curr_alpha * self.gi_update_factor
-                            next_actor_lr = curr_actor_lr * self.gi_update_factor
-                        else:
-                            next_alpha = curr_alpha * self.gi_update_factor
-                            next_actor_lr = curr_actor_lr
-                
-                next_alpha = np.clip(next_alpha, self.gi_min_alpha, self.gi_max_alpha)
-                
-                if next_alpha == self.gi_min_alpha or next_alpha == self.gi_max_alpha:
-                    next_actor_lr = curr_actor_lr
-                    
-                if self.gi_actor_lr_scheduler == "static":
-                    next_actor_lr = curr_actor_lr
+                    raise ValueError()
                     
                 self.next_alpha = next_alpha
                 self.next_actor_lr = next_actor_lr
@@ -788,7 +857,7 @@ class GradA2CAgent(A2CAgent):
         # original policy, because PPO assumes it;
         # if it is not close enough, we decrease [alpha];
         
-        if self.gi_algorithm == "grad-ppo":
+        if self.gi_algorithm == "grad-ppo-alpha":
         
             with torch.no_grad():
                 n_mus, n_sigmas = self.actor.forward_dist(obses)
@@ -866,16 +935,21 @@ class GradA2CAgent(A2CAgent):
         # =================================================
 
         value_preds_batch = input_dict['old_values']
-        old_action_log_probs_batch = input_dict['old_logp_actions']
         advantage = input_dict['advantages']
         actions_batch = input_dict['actions']
-        initial_ratio = input_dict['initial_ratio']
         obs_batch = input_dict['obs']
 
         # these old mu and sigma are used to compute new policy's KL div from
         # the old policy, which could be used to update learning rate later;
-        old_mu_batch = input_dict['mu']
-        old_sigma_batch = input_dict['sigma']
+        if self.gi_algorithm == "grad-ppo-alpha":
+            old_mu_batch = input_dict['mu']
+            old_sigma_batch = input_dict['sigma']
+            old_action_log_probs_batch_0 = input_dict['old_logp_actions']       # action log probs before alpha update;
+            old_action_log_probs_batch_1 = input_dict['logp_actions']           # action log probs after alpha update;
+        else:
+            old_mu_batch = input_dict['old_mu']
+            old_sigma_batch = input_dict['old_sigma']
+            old_action_log_probs_batch = input_dict['old_logp_actions']
         
         lr_mul = 1.0
         curr_e_clip = lr_mul * self.e_clip
@@ -890,7 +964,20 @@ class GradA2CAgent(A2CAgent):
             curr_std = curr_std.expand(curr_mu.shape[0], -1).clone()
         neglogp = self.neglogp(actions_batch, curr_mu, curr_std, torch.log(curr_std))
 
-        a_loss, worse_ratio = _grad_common_losses.alpha_actor_loss(old_action_log_probs_batch, neglogp, advantage, self.ppo, curr_e_clip, initial_ratio)
+        if self.gi_algorithm == "grad-ppo-alpha":
+            a_loss = _grad_common_losses.actor_loss_alpha(old_action_log_probs_batch_0, 
+                                                                       old_action_log_probs_batch_1,
+                                                                       neglogp, 
+                                                                       advantage, 
+                                                                       self.ppo, 
+                                                                       curr_e_clip)
+        else:
+            a_loss = _grad_common_losses.actor_loss(old_action_log_probs_batch, 
+                                                    neglogp, 
+                                                    advantage, 
+                                                    self.ppo, 
+                                                    curr_e_clip)
+            
         c_loss = torch.zeros((1,), device=self.ppo_device)
         b_loss = self.bound_loss(curr_mu)
 
@@ -901,7 +988,7 @@ class GradA2CAgent(A2CAgent):
         entropy = torch.zeros((1,), device=self.ppo_device)
         assert self.entropy_coef == 0., ""
 
-        loss = a_loss + 0.5 * c_loss * self.critic_coef - entropy * self.entropy_coef + b_loss * self.bounds_loss_coef
+        loss = a_loss + b_loss * self.bounds_loss_coef # 0.5 * c_loss * self.critic_coef - entropy * self.entropy_coef + b_loss * self.bounds_loss_coef
         
         self.ppo_optimizer.zero_grad()
         if self.multi_gpu:

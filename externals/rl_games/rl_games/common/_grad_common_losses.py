@@ -89,6 +89,7 @@ def alpha_policy_correspondence_loss(actions, advantages, adv_grads, model, old_
 
     return loss
 
+# WARNING: Not for alpha-policy based grad-ppo.
 def alpha_actor_loss(old_action_log_probs_batch, action_log_probs, advantage, is_ppo, curr_e_clip, initial_ratio):
 
     if is_ppo:
@@ -111,3 +112,41 @@ def alpha_actor_loss(old_action_log_probs_batch, action_log_probs, advantage, is
         worse_ratio = -1.0
     
     return a_loss, worse_ratio
+
+# original actor loss;
+def actor_loss(old_action_log_probs_batch, action_log_probs, advantage, is_ppo, curr_e_clip):
+    if is_ppo:
+        ratio = torch.exp(old_action_log_probs_batch - action_log_probs)
+        surr1 = advantage * ratio
+        surr2 = advantage * torch.clamp(ratio, 1.0 - curr_e_clip,
+                                1.0 + curr_e_clip)
+        a_loss = torch.max(-surr1, -surr2)
+    else:
+        a_loss = (action_log_probs * advantage)
+    
+    return a_loss
+
+# actor loss for alpha-policy based grad ppo;
+# @ old_action_log_probs_batch0: neg action log probs before alpha-policy update
+# @ old_action_log_probs_batch1: neg action log probs after alpha-policy update
+def actor_loss_alpha(old_action_log_probs_batch0, 
+                     old_action_log_probs_batch1,
+                     action_log_probs, 
+                     advantage, 
+                     is_ppo, 
+                     curr_e_clip):
+    if is_ppo:
+        action_probs_batch0 = torch.exp(-old_action_log_probs_batch0)
+        action_probs_batch1 = torch.exp(-old_action_log_probs_batch1)
+        action_probs_batch_mid = (action_probs_batch0 + action_probs_batch1)
+        action_log_probs_batch_mid = -torch.log(action_probs_batch_mid)
+        
+        ratio = torch.exp(action_log_probs_batch_mid - action_log_probs)
+        surr1 = advantage * ratio
+        surr2 = advantage * torch.clamp(ratio, 1.0 - curr_e_clip,
+                                1.0 + curr_e_clip)
+        a_loss = torch.max(-surr1, -surr2)
+    else:
+        a_loss = (action_log_probs * advantage)
+    
+    return a_loss

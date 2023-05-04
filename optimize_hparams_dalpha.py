@@ -317,7 +317,7 @@ if __name__ == '__main__':
     args.num_envs = 0           # default;
     args.play = False           # only training;
     args.render = False         # no rendering;
-    args.logdir = f"optuna/logs/{args.env}/dynamic_alpha_version_4_gpu/"
+    args.logdir = f"optuna/logs/{args.env}/dynamic_alpha_version_5/"
     args.cfg = f"./examples/cfg/grad_ppo_alpha/{args.env}.yaml"
     args.no_time_stamp = False  # add time stamp to log files;
 
@@ -347,7 +347,7 @@ if __name__ == '__main__':
     
     optuna.logging.get_logger("optuna").addHandler(logging.StreamHandler(sys.stdout))
 
-    study_name = f"dynamic-alpha-version-4-gpu-{args.env}"  # Unique identifier of the study.
+    study_name = f"dynamic-alpha-version-5-{args.env}"  # Unique identifier of the study.
     
     if not os.path.exists("./optuna/db"):
         os.makedirs("./optuna/db")

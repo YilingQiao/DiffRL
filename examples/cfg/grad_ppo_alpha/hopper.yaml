@@ -57,7 +57,7 @@ params:
     lr_threshold: 0.008
     kl_threshold: 0.008
     score_to_win: 20000
-    max_epochs: 2000
+    max_epochs: 100
     save_best_after: 50
     save_frequency: 100
     grad_norm: 1.0
@@ -90,14 +90,15 @@ params:
       # algorithm: 'ppo-only'
       # algorithm: 'static-alpha-only'
       algorithm: 'dynamic-alpha-only'
-      # algorithm: 'grad-ppo'
+      # algorithm: 'grad-ppo-shac'
+      # algorithm: 'grad-ppo-alpha'
+
 
       max_alpha: 1e-1
-      min_alpha: 1e-3
       desired_alpha: 1e-2
       update_factor: 1.05
       update_interval: 0.05
-      actor_lr_scheduler: static
+      dynamic_alpha_scheduler: dynamic2
 
       # THESE ARE THE REAL NETWORKS WE ARE GOING TO USE;
       network:
@@ -116,7 +117,7 @@ params:
       # LEARNING RATE FOR RP-GRADIENT BASED ACTOR UPDATE;
       actor_learning_rate_shac: 1e-2 # 4e-2
       
-      actor_learning_rate_alpha: 1e-2
+      actor_learning_rate_alpha: 1e-3
       actor_iterations_alpha: 16
 
       # LEARNING RATE FOR CRITIC UPDATE;

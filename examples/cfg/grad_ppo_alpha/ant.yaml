@@ -90,14 +90,15 @@ params:
       # algorithm: 'ppo-only'
       # algorithm: 'static-alpha-only'
       algorithm: 'dynamic-alpha-only'
-      # algorithm: 'grad-ppo'
+      # algorithm: 'grad-ppo-shac'
+      # algorithm: 'grad-ppo-alpha'
+
 
       max_alpha: 1e-2
-      min_alpha: 1e-3
       desired_alpha: 1e-1
       update_factor: 1.05
       update_interval: 0.05
-      actor_lr_scheduler: static
+      dynamic_alpha_scheduler: dynamic1
 
       # THESE ARE THE REAL NETWORKS WE ARE GOING TO USE;
       network:
