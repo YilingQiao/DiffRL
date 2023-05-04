@@ -159,7 +159,7 @@ def objective(trial):
     alpha = trial.suggest_categorical("alpha", ["5e-1", "2e-1", "1e-1", "5e-2", "2e-2", "1e-2", "5e-3", "2e-3", "1e-3"])
     alpha = float(alpha)
     cfg_train["params"]["config"]["gi_params"]["max_alpha"] = alpha * 10.
-    cfg_train["params"]["config"]["gi_params"]["min_alpha"] = alpha / 10.
+    # cfg_train["params"]["config"]["gi_params"]["min_alpha"] = alpha / 10.
     cfg_train["params"]["config"]["gi_params"]["desired_alpha"] = alpha
     
     # learning rates;
@@ -177,9 +177,9 @@ def objective(trial):
     update_interval = float(update_interval)
     cfg_train["params"]["config"]["gi_params"]["update_interval"] = update_interval
     
-    # actor lr scheduler;
-    actor_lr_scheduler = trial.suggest_categorical("actor_lr_scheduler", ["static", "dynamic0", "dynamic1"])
-    cfg_train["params"]["config"]["gi_params"]["actor_lr_scheduler"] = actor_lr_scheduler
+    # dynamic alpha scheduler;
+    dynamic_alpha_scheduler = trial.suggest_categorical("dynamic_alpha_scheduler", ["static_lr", "dynamic0", "dynamic1", "dynamic2", "dynamic3"])
+    cfg_train["params"]["config"]["gi_params"]["dynamic_alpha_scheduler"] = dynamic_alpha_scheduler
 
     # save config
     if cfg_train['params']['general']['train']:
