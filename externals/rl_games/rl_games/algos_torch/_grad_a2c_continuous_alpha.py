@@ -113,6 +113,8 @@ class GradA2CAgent(A2CAgent):
         # dynamic2: est_hessian_det should not exceed 1. + dynamic0
         # dynamic3: est_hessian_det should not exceed 1. + dynamic1
         assert self.gi_dynamic_alpha_scheduler in ["static_lr", "dynamic0", "dynamic1", "dynamic2", "dynamic3"]
+
+        self.gi_max_dist_rp_lr = float(config['gi_params']['max_dist_rp_lr'])
         
         self.next_alpha = self.gi_curr_alpha
         self.next_actor_lr = self.actor_lr
@@ -464,7 +466,7 @@ class GradA2CAgent(A2CAgent):
         # update actor;
         
         # SHAC-style actor update;
-        if self.gi_algorithm == "shac-only":
+        if self.gi_algorithm in ["shac-only", "grad-ppo-shac"]:
 
             # compute loss for actor network and update;
             # this equals to GAE(1) of the first term;
@@ -496,7 +498,7 @@ class GradA2CAgent(A2CAgent):
 
         # set alpha-policy as target policy and update actor towards it;
         # here alpha is pre-defined static hyperparameter;
-        elif self.gi_algorithm in ["static-alpha-only", "dynamic-alpha-only"]:
+        elif self.gi_algorithm in ["static-alpha-only", "dynamic-alpha-only", "grad-ppo-alpha"]:
             
             # compute advantages;
             
@@ -850,47 +852,6 @@ class GradA2CAgent(A2CAgent):
                 raise NotImplementedError()
             else:
                 advantages = (advantages - advantages.mean()) / (advantages.std() + 1e-8)
-
-        # compute [mus] and [sigmas] again here because we could have
-        # updated policy in [play_steps] using RP gradients;
-        # find out if the updated policy is still close enough to the
-        # original policy, because PPO assumes it;
-        # if it is not close enough, we decrease [alpha];
-        
-        if self.gi_algorithm == "grad-ppo-alpha":
-        
-            with torch.no_grad():
-                n_mus, n_sigmas = self.actor.forward_dist(obses)
-                if n_sigmas.ndim == 1:
-                    n_sigmas = n_sigmas.unsqueeze(0)                      
-                    n_sigmas = n_sigmas.expand(mus.shape[0], -1).clone()
-                
-                n_neglogpacs = self.neglogp(actions, n_mus, n_sigmas, torch.log(n_sigmas))
-                
-                # find out distance between current policy and old policy;
-                
-                pac_ratio = torch.exp(torch.clamp(neglogpacs - n_neglogpacs, max=16.))  # prevent [inf];
-                out_of_range_pac_ratio = torch.logical_or(pac_ratio > (1. - self.e_clip), 
-                                                          pac_ratio < (1. + self.e_clip))
-                out_of_range_pac_ratio = torch.count_nonzero(out_of_range_pac_ratio) / actions.shape[0]
-                        
-                # find out if current policy is better than old policy in terms of lr gradients;
-                
-                est_curr_performance = torch.sum(advantages * pac_ratio)
-                
-                # if current policy is too far from old policy or is worse than old policy,
-                # decrease alpha;
-                
-                if out_of_range_pac_ratio > self.max_dist_rp_lr or \
-                    est_curr_performance < 0.:
-                    
-                    self.next_alpha = self.gi_curr_alpha / self.gi_update_factor
-                    if self.gi_actor_lr_scheduler == "dynamic0":
-                        self.next_actor_lr = self.actor_lr / self.gi_update_factor
-                
-                dataset_dict['mu'] = n_mus
-                dataset_dict['sigma'] = n_sigmas
-                dataset_dict['logp_actions'] = n_neglogpacs
                 
         dataset_dict = {}
         dataset_dict['old_values'] = values
@@ -903,6 +864,67 @@ class GradA2CAgent(A2CAgent):
         dataset_dict['old_mu'] = mus
         dataset_dict['old_sigma'] = sigmas
         dataset_dict['old_logp_actions'] = neglogpacs
+
+        if self.gi_algorithm == "ppo-only":
+
+            dataset_dict['mu'] = mus
+            dataset_dict['sigma'] = sigmas
+            dataset_dict['logp_actions'] = neglogpacs
+
+        elif self.gi_algorithm == "grad-ppo-shac":
+
+            with torch.no_grad():
+                n_mus, n_sigmas = self.actor.forward_dist(obses)
+                if n_sigmas.ndim == 1:
+                    n_sigmas = n_sigmas.unsqueeze(0)                      
+                    n_sigmas = n_sigmas.expand(mus.shape[0], -1).clone()
+                
+                n_neglogpacs = self.neglogp(actions, n_mus, n_sigmas, torch.log(n_sigmas))
+
+                dataset_dict['mu'] = n_mus
+                dataset_dict['sigma'] = n_sigmas
+                dataset_dict['logp_actions'] = n_neglogpacs
+
+        # compute [mus] and [sigmas] again here because we could have
+        # updated policy in [play_steps] using RP gradients;
+        # find out if the updated policy is still close enough to the
+        # original policy, because PPO assumes it;
+        # if it is not close enough, we decrease [alpha];
+        
+        elif self.gi_algorithm == "grad-ppo-alpha":
+        
+            with torch.no_grad():
+                n_mus, n_sigmas = self.actor.forward_dist(obses)
+                if n_sigmas.ndim == 1:
+                    n_sigmas = n_sigmas.unsqueeze(0)                      
+                    n_sigmas = n_sigmas.expand(mus.shape[0], -1).clone()
+                
+                n_neglogpacs = self.neglogp(actions, n_mus, n_sigmas, torch.log(n_sigmas))
+                
+                # find out distance between current policy and old policy;
+                
+                pac_ratio = torch.exp(torch.clamp(neglogpacs - n_neglogpacs, max=16.))  # prevent [inf];
+                out_of_range_pac_ratio = torch.logical_or(pac_ratio < (1. - self.e_clip), 
+                                                          pac_ratio > (1. + self.e_clip))
+                out_of_range_pac_ratio = torch.count_nonzero(out_of_range_pac_ratio) / actions.shape[0]
+                        
+                # find out if current policy is better than old policy in terms of lr gradients;
+                
+                est_curr_performance = torch.sum(advantages * pac_ratio)
+                
+                # if current policy is too far from old policy or is worse than old policy,
+                # decrease alpha;
+                
+                if out_of_range_pac_ratio > self.gi_max_dist_rp_lr or \
+                    est_curr_performance < 0.:
+                    
+                    self.next_alpha = self.gi_curr_alpha / self.gi_update_factor
+                    if self.gi_dynamic_alpha_scheduler in ['dynamic0', 'dynamic2']:
+                        self.next_actor_lr = self.actor_lr / self.gi_update_factor
+                
+                dataset_dict['mu'] = n_mus
+                dataset_dict['sigma'] = n_sigmas
+                dataset_dict['logp_actions'] = n_neglogpacs
         
         self.dataset.update_values_dict(dataset_dict)
 
@@ -941,15 +963,15 @@ class GradA2CAgent(A2CAgent):
 
         # these old mu and sigma are used to compute new policy's KL div from
         # the old policy, which could be used to update learning rate later;
+        # it is not directly involved in policy updates;
+        old_mu_batch = input_dict['mu']
+        old_sigma_batch = input_dict['sigma']
+        
         if self.gi_algorithm == "grad-ppo-alpha":
-            old_mu_batch = input_dict['mu']
-            old_sigma_batch = input_dict['sigma']
             old_action_log_probs_batch_0 = input_dict['old_logp_actions']       # action log probs before alpha update;
             old_action_log_probs_batch_1 = input_dict['logp_actions']           # action log probs after alpha update;
         else:
-            old_mu_batch = input_dict['old_mu']
-            old_sigma_batch = input_dict['old_sigma']
-            old_action_log_probs_batch = input_dict['old_logp_actions']
+            old_action_log_probs_batch = input_dict['old_logp_actions']         # original action log probs;
         
         lr_mul = 1.0
         curr_e_clip = lr_mul * self.e_clip

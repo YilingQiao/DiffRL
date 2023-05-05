@@ -138,15 +138,18 @@ def actor_loss_alpha(old_action_log_probs_batch0,
     if is_ppo:
         action_probs_batch0 = torch.exp(-old_action_log_probs_batch0)
         action_probs_batch1 = torch.exp(-old_action_log_probs_batch1)
-        action_probs_batch_mid = (action_probs_batch0 + action_probs_batch1)
+        action_probs_batch_mid = (action_probs_batch0 + action_probs_batch1) * 0.5
         action_log_probs_batch_mid = -torch.log(action_probs_batch_mid)
-        
-        ratio = torch.exp(action_log_probs_batch_mid - action_log_probs)
+
+        ratio = action_log_probs_batch_mid - action_log_probs
+        ratio = torch.clamp(ratio, max=16.0)        # prevent ratio becoming [inf];
+        ratio = torch.exp(ratio)
+
         surr1 = advantage * ratio
         surr2 = advantage * torch.clamp(ratio, 1.0 - curr_e_clip,
                                 1.0 + curr_e_clip)
         a_loss = torch.max(-surr1, -surr2)
     else:
-        a_loss = (action_log_probs * advantage)
+        raise NotImplementedError()
     
     return a_loss

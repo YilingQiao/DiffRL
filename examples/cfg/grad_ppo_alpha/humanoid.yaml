@@ -99,6 +99,7 @@ params:
       update_factor: 1.05
       update_interval: 0.05
       dynamic_alpha_scheduler: dynamic1
+      max_dist_rp_lr: 0.5
 
       # THESE ARE THE REAL NETWORKS WE ARE GOING TO USE;
       network:
