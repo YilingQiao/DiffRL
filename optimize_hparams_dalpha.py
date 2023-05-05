@@ -173,7 +173,7 @@ def objective(trial):
     cfg_train["params"]["config"]["gi_params"]["update_factor"] = update_factor
     
     # update interval;
-    update_interval = trial.suggest_categorical("update_interval", ["0.02", "0.05", "0.10", "0.15", "0.20", "0.30", "0.40"])
+    update_interval = trial.suggest_categorical("update_interval", ["0.005", "0.01", "0.02", "0.05"])
     update_interval = float(update_interval)
     cfg_train["params"]["config"]["gi_params"]["update_interval"] = update_interval
     
@@ -317,7 +317,7 @@ if __name__ == '__main__':
     args.num_envs = 0           # default;
     args.play = False           # only training;
     args.render = False         # no rendering;
-    args.logdir = f"optuna/logs/dynamic_alpha_version_5/{args.env}/"
+    args.logdir = f"optuna/logs/dynamic_alpha_version_6/{args.env}/"
     args.cfg = f"./examples/cfg/grad_ppo_alpha/{args.env}.yaml"
     args.no_time_stamp = False  # add time stamp to log files;
 
@@ -347,7 +347,7 @@ if __name__ == '__main__':
     
     optuna.logging.get_logger("optuna").addHandler(logging.StreamHandler(sys.stdout))
 
-    study_name = f"dynamic-alpha-version-5-{args.env}"  # Unique identifier of the study.
+    study_name = f"dynamic-alpha-version-6-{args.env}"  # Unique identifier of the study.
     
     if not os.path.exists("./optuna/db"):
         os.makedirs("./optuna/db")
