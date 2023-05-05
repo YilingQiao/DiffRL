@@ -567,7 +567,8 @@ class GradA2CAgent(A2CAgent):
                 distr = GradNormal(mu, std)
                 rpeps_actions = distr.eps_to_action(t_rp_eps)
                 
-                attained_alpha = (rpeps_actions - t_actions) / t_adv_gradient
+                clamp_t_adv_gradient = torch.sign(t_adv_gradient) * torch.clamp(torch.abs(t_adv_gradient), min=1e-5)
+                attained_alpha = (rpeps_actions - t_actions) / clamp_t_adv_gradient
                 attained_alpha = torch.mean(attained_alpha, dim=-1)
                 attained_alpha, _ = torch.sort(attained_alpha)
                 attained_alpha = attained_alpha.detach().cpu().numpy()
