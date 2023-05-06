@@ -121,7 +121,7 @@ class GradA2CAgent(A2CAgent):
         
         self.min_hessian_det_list = []
         self.min_hessian_det_list_size = 16
-        self.max_hessian_det_std = 0.05
+        self.max_hessian_det_std = float(config["gi_params"]["max_est_hessian_det_std"])
         
         # initialize ppo optimizer;
 
@@ -749,7 +749,7 @@ class GradA2CAgent(A2CAgent):
                             else:
                                 next_alpha = curr_alpha * self.gi_update_factor
                     
-                    next_alpha = np.clip(next_alpha, self.gi_min_alpha, self.gi_max_alpha)
+                    # next_alpha = np.clip(next_alpha, self.gi_min_alpha, self.gi_max_alpha)
                     
                 else:
                     

@@ -183,6 +183,10 @@ def objective(trial):
     # dynamic_alpha_scheduler = trial.suggest_categorical("dynamic_alpha_scheduler", ["static_lr", "dynamic0", "dynamic1", "dynamic2", "dynamic3"])
     cfg_train["params"]["config"]["gi_params"]["dynamic_alpha_scheduler"] = 'dynamic4' # dynamic_alpha_scheduler
 
+    max_est_hessian_det_std = trial.suggest_categorical("max_est_hessian_det_std", ["0.05", "0.10", "0.15", "0.20"])
+    max_est_hessian_det_std = float(max_est_hessian_det_std)
+    cfg_train["params"]["config"]["gi_params"]["max_est_hessian_det_std"] = max_est_hessian_det_std
+
     # save config
     if cfg_train['params']['general']['train']:
         log_dir = cfg_train["params"]["general"]["logdir"]
@@ -319,7 +323,7 @@ if __name__ == '__main__':
     args.num_envs = 0           # default;
     args.play = False           # only training;
     args.render = False         # no rendering;
-    args.logdir = f"optuna/logs/dynamic_alpha_version_7/{args.env}/"
+    args.logdir = f"optuna/logs/dynamic_alpha_version_8/{args.env}/"
     args.cfg = f"./examples/cfg/grad_ppo_alpha/{args.env}.yaml"
     args.no_time_stamp = False  # add time stamp to log files;
 
@@ -349,7 +353,7 @@ if __name__ == '__main__':
     
     optuna.logging.get_logger("optuna").addHandler(logging.StreamHandler(sys.stdout))
 
-    study_name = f"dynamic-alpha-version-7-{args.env}"  # Unique identifier of the study.
+    study_name = f"dynamic-alpha-version-8-{args.env}"  # Unique identifier of the study.
     
     if not os.path.exists("./optuna/db"):
         os.makedirs("./optuna/db")
