@@ -103,11 +103,12 @@ params:
       
       # THESE ARE THE REAL NETWORKS WE ARE GOING TO USE;
       network:
-        actor: ActorStochasticMLP # ActorDeterministicMLP
+        actor: GradActorStochasticMLP # ActorDeterministicMLP
         actor_mlp:
           units: [64, 64]
           activation: elu
         actor_logstd_init: 0.0
+        fixed_sigma: False
 
         critic: CriticMLP
         critic_mlp:

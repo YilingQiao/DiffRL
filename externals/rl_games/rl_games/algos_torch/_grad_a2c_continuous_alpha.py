@@ -99,8 +99,8 @@ class GradA2CAgent(A2CAgent):
         self.gi_num_step = config['gi_params']['num_step']
         self.gi_lr_schedule = config['gi_params']['lr_schedule']
         
-        self.gi_max_alpha = float(config['gi_params']['max_alpha'])
-        self.gi_min_alpha = 1e-5
+        self.gi_max_alpha = None # float(config['gi_params']['max_alpha'])
+        self.gi_min_alpha = None # 1e-15
         self.gi_desired_alpha = float(config['gi_params']['desired_alpha'])
         self.gi_curr_alpha = self.gi_desired_alpha
         self.gi_update_factor = float(config['gi_params']['update_factor'])
@@ -112,12 +112,16 @@ class GradA2CAgent(A2CAgent):
         # dynamic1: actor lr only decreases when actor loss does not decrease (alpha does not decrease when actor loss does not decrease)
         # dynamic2: est_hessian_det should not exceed 1. + dynamic0
         # dynamic3: est_hessian_det should not exceed 1. + dynamic1
-        assert self.gi_dynamic_alpha_scheduler in ["static_lr", "dynamic0", "dynamic1", "dynamic2", "dynamic3"]
+        assert self.gi_dynamic_alpha_scheduler in ["static_lr", "dynamic0", "dynamic1", "dynamic2", "dynamic3", "dynamic4"]
 
         self.gi_max_dist_rp_lr = float(config['gi_params']['max_dist_rp_lr'])
         
         self.next_alpha = self.gi_curr_alpha
         self.next_actor_lr = self.actor_lr
+        
+        self.min_hessian_det_list = []
+        self.min_hessian_det_list_size = 16
+        self.max_hessian_det_std = 0.05
         
         # initialize ppo optimizer;
 
@@ -132,7 +136,7 @@ class GradA2CAgent(A2CAgent):
                 self.obs_rms = RunningMeanStd(shape=self.obs_shape, device=self.ppo_device)
                 
         if self.normalize_value:
-            raise NotImplementedError()
+            self.val_rms = RunningMeanStd(shape=(1,), device=self.ppo_device)
 
         # episode length;
         self.episode_max_length = self.vec_env.env.episode_length
@@ -277,7 +281,7 @@ class GradA2CAgent(A2CAgent):
             + 0.5 * np.log(2.0 * np.pi) * x.size()[-1] \
             + logstd.sum(dim=-1)
 
-    def get_action_values(self, obs, obs_rms):
+    def get_action_values(self, obs, obs_rms, val_rms):
         
         # normalize input if needed, we update rms only here;
         processed_obs = obs['obs']
@@ -297,11 +301,13 @@ class GradA2CAgent(A2CAgent):
         # self.target_critic.eval()
         values = self.target_critic(processed_obs)
         
+        # if using normalize value, target_critic learns to give normalized state values;
+        # therefore, unnormalize the resulting value;
+        if self.normalize_value:
+            values = val_rms.normalize(values, True)
+        
         # assert res_dict['rnn_states'] == None, "Not supported yet"
         assert not self.has_central_value, "Not supported yet"
-
-        if self.normalize_value:
-            raise NotImplementedError()
 
         res_dict = {
             "obs": processed_obs,
@@ -361,11 +367,15 @@ class GradA2CAgent(A2CAgent):
         grad_fdones = []
         grad_rp_eps = []
 
-        # use frozen [obs_rms] during this one function call;
+        # use frozen [obs_rms] and [value_rms] during this one function call;
         curr_obs_rms = None
+        curr_val_rms = None
         if self.normalize_input:
             with torch.no_grad():
                 curr_obs_rms = copy.deepcopy(self.obs_rms)
+        if self.normalize_value:
+            with torch.no_grad():
+                curr_val_rms = copy.deepcopy(self.val_rms)
 
         # start with clean grads;
         self.obs = self.vec_env.env.initialize_trajectory()
@@ -381,7 +391,7 @@ class GradA2CAgent(A2CAgent):
             if self.use_action_masks:
                 raise NotImplementedError()
             else:
-                res_dict = self.get_action_values(self.obs, curr_obs_rms)
+                res_dict = self.get_action_values(self.obs, curr_obs_rms, curr_val_rms)
 
             # we store tensor objects with gradients;
             grad_obses.append(res_dict['obs'])
@@ -421,6 +431,8 @@ class GradA2CAgent(A2CAgent):
                     # do not update rms here;
                     next_obs = curr_obs_rms.normalize(next_obs)
                 next_value = self.target_critic(next_obs)
+                if self.normalize_value:
+                    next_value = curr_val_rms.normalize(next_value, True)
                 grad_next_values.append(next_value)
 
             done_env_ids = self.dones.nonzero(as_tuple = False).squeeze(-1)
@@ -524,6 +536,9 @@ class GradA2CAgent(A2CAgent):
                 t_actions = swap_and_flatten01(torch.stack(grad_actions, dim=0))
                 t_adv_gradient = swap_and_flatten01(t_adv_gradient)
                 t_alpha_actions = t_actions + self.gi_curr_alpha * t_adv_gradient
+                
+            # initialize optimizer;
+            self.actor_optimizer = torch.optim.Adam(self.actor.parameters(), lr=self.actor_lr)
             
             actor_loss_0 = None
             actor_loss_1 = None
@@ -558,27 +573,42 @@ class GradA2CAgent(A2CAgent):
             actor_loss_ratio = actor_loss_1 / actor_loss_0
             self.writer.add_scalar("info_alpha/actor_loss_ratio", actor_loss_ratio, self.epoch_num)
             
-            # find out attained alpha, which can be different from our desired alpha;
-            # for only statistics;
-            with torch.no_grad():
+            # # find out attained alpha, which can be different from our desired alpha;
+            # # for only statistics;
+            # with torch.no_grad():
                 
-                _, mu, std, _ = self.actor.forward_with_dist(t_obses)
+            #     _, mu, std, _ = self.actor.forward_with_dist(t_obses)
                 
-                distr = GradNormal(mu, std)
-                rpeps_actions = distr.eps_to_action(t_rp_eps)
+            #     distr = GradNormal(mu, std)
+            #     rpeps_actions = distr.eps_to_action(t_rp_eps)
                 
-                clamp_t_adv_gradient = torch.sign(t_adv_gradient) * torch.clamp(torch.abs(t_adv_gradient), min=1e-5)
-                attained_alpha = (rpeps_actions - t_actions) / clamp_t_adv_gradient
-                attained_alpha = torch.mean(attained_alpha, dim=-1)
-                attained_alpha, _ = torch.sort(attained_alpha)
-                attained_alpha = attained_alpha.detach().cpu().numpy()
+            #     # t_adv_gradient_sign = torch.sign(t_adv_gradient)
+            #     # t_adv_gradient_sign = torch.where(t_adv_gradient_sign == 0, torch.ones_like(t_adv_gradient_sign), t_adv_gradient_sign)
+            #     # clamp_t_adv_gradient = t_adv_gradient_sign * torch.clamp(torch.abs(t_adv_gradient), min=1e-5)
                 
-                # only use median values to cull out noises;
-                attained_alpha_len = attained_alpha.shape[0] // 4
-                attained_alpha = attained_alpha[attained_alpha_len:-attained_alpha_len]
-                attained_alpha = np.mean(attained_alpha)
+            #     tmp0 = torch.sum(rpeps_actions - t_actions, dim=-1)
+            #     tmp1 = torch.sum(t_adv_gradient, dim=-1)
+            #     tmp2 = torch.sign(tmp1)
+            #     tmp2 = torch.where(tmp2 == 0, torch.ones_like(tmp2), tmp2)
+            #     tmp1 = tmp2 * torch.clamp(torch.abs(tmp1), min=1e-5)
+            #     attained_alpha = tmp0 / tmp1
+            #     # attained_alpha = attained_alpha.detach().cpu().numpy()
                 
-            self.writer.add_scalar("info_alpha/attained_alpha", attained_alpha, self.epoch_num)
+            #     # attained_alpha = (rpeps_actions - t_actions) / clamp_t_adv_gradient
+            #     # attained_alpha = torch.mean(attained_alpha, dim=-1)
+            #     attained_alpha, _ = torch.sort(attained_alpha)
+            #     attained_alpha = attained_alpha.detach().cpu().numpy()
+            #     # print("Attained alpha mean: {:.6f} / std: {:.6f}".format(np.mean(attained_alpha), np.std(attained_alpha)))
+                
+            #     # valid_attained_alpha_num = np.count_nonzero(np.logical_and(attained_alpha < 2.0 * self.gi_curr_alpha, attained_alpha > 0.5 * self.gi_curr_alpha))
+            #     # print("Attained alpha valid: {:.4f}".format(valid_attained_alpha_num / len(attained_alpha)))
+                
+            #     # # only use median values to cull out noises;
+            #     # attained_alpha_len = attained_alpha.shape[0] // 4
+            #     # attained_alpha = attained_alpha[attained_alpha_len:-attained_alpha_len]
+            #     attained_alpha = np.mean(attained_alpha)
+                
+            # self.writer.add_scalar("info_alpha/attained_alpha", attained_alpha, self.epoch_num)
                 
             with torch.no_grad():
             
@@ -599,10 +629,21 @@ class GradA2CAgent(A2CAgent):
             postupdate_action_eps_jacdet = torch.logdet(postupdate_action_eps_jac)
             
             est_hessian_logdet = postupdate_action_eps_jacdet - preupdate_action_eps_jacdet
+            est_hessian_det = torch.exp(est_hessian_logdet)
             
-            mean_est_hessian_det = torch.mean(torch.exp(est_hessian_logdet))
+            mean_est_hessian_det = torch.mean(est_hessian_det)
+            min_est_hessian_det = torch.min(est_hessian_det)
+            max_est_hessian_det = torch.max(est_hessian_det)
+            
+            if len(self.min_hessian_det_list) == self.min_hessian_det_list_size:
+                self.min_hessian_det_list.pop(0)
+            self.min_hessian_det_list.append(min_est_hessian_det)
+            min_hessian_std = np.std(self.min_hessian_det_list)
             
             self.writer.add_scalar("info_alpha/mean_est_hessian_det", mean_est_hessian_det, self.epoch_num)
+            self.writer.add_scalar("info_alpha/min_est_hessian_det", min_est_hessian_det, self.epoch_num)
+            self.writer.add_scalar("info_alpha/max_est_hessian_det", max_est_hessian_det, self.epoch_num)
+            self.writer.add_scalar("info_alpha/est_hessaian_det_std", min_hessian_std, self.epoch_num)
             
             if self.gi_algorithm in ['dynamic-alpha-only', 'grad-ppo-alpha']:
                 
@@ -688,6 +729,28 @@ class GradA2CAgent(A2CAgent):
                     
                     next_alpha = np.clip(next_alpha, self.gi_min_alpha, self.gi_max_alpha)
                     
+                elif self.gi_dynamic_alpha_scheduler == 'dynamic4':
+                    
+                    if actor_loss_ratio > 1.:
+                        # alpha does not change;
+                        next_actor_lr = curr_actor_lr / self.gi_update_factor
+                        self.actor_iterations = (self.actor_iterations * self.gi_update_factor) // 1
+                    else:
+                        # actor_lr does not change;
+                        
+                        if min_hessian_std > self.max_hessian_det_std:
+                            
+                            next_alpha = curr_alpha / self.gi_update_factor
+                            
+                        else:
+                            
+                            if min_est_hessian_det < 0.2:
+                                next_alpha = curr_alpha / self.gi_update_factor
+                            else:
+                                next_alpha = curr_alpha * self.gi_update_factor
+                    
+                    next_alpha = np.clip(next_alpha, self.gi_min_alpha, self.gi_max_alpha)
+                    
                 else:
                     
                     raise ValueError()
@@ -714,6 +777,11 @@ class GradA2CAgent(A2CAgent):
 
                 th_obs = torch.cat(grad_obses, dim=0)
                 th_target_values = torch.cat(target_values, dim=0)
+                
+                # update value rms here once;
+                if self.normalize_value:
+                    self.val_rms.update(th_target_values)
+                
                 batch_size = len(th_target_values) // self.critic_num_batch
                 critic_dataset = CriticDataset(batch_size, th_obs, th_target_values)
 
@@ -731,8 +799,8 @@ class GradA2CAgent(A2CAgent):
 
                     predicted_values = self.critic(batch_sample['obs']).squeeze(-1)
                     if self.normalize_value:
-                        raise NotImplementedError()
-                        predicted_values = self.value_mean_std(predicted_values, True)
+                        # predicted_values = curr_val_rms.normalize(predicted_values, True)
+                        predicted_values = self.val_rms.normalize(predicted_values, True)
                     
                     target_values = batch_sample['target_values']
                     training_critic_loss = torch.mean((predicted_values - target_values) ** 2, dim=0)
@@ -843,10 +911,8 @@ class GradA2CAgent(A2CAgent):
         rnn_states = batch_dict.get('rnn_states', None)
         rnn_masks = batch_dict.get('rnn_masks', None)
 
-        if self.normalize_value:
-            raise NotImplementedError()
-
         advantages = torch.sum(advantages, axis=1)
+        unnormalized_advantages = advantages
 
         if self.normalize_advantage:
             if self.is_rnn:
@@ -908,10 +974,14 @@ class GradA2CAgent(A2CAgent):
                 out_of_range_pac_ratio = torch.logical_or(pac_ratio < (1. - self.e_clip), 
                                                           pac_ratio > (1. + self.e_clip))
                 out_of_range_pac_ratio = torch.count_nonzero(out_of_range_pac_ratio) / actions.shape[0]
+                
+                self.writer.add_scalar("info_alpha/oor_pac_ratio", out_of_range_pac_ratio, self.epoch_num)
                         
                 # find out if current policy is better than old policy in terms of lr gradients;
                 
-                est_curr_performance = torch.sum(advantages * pac_ratio)
+                est_curr_performance = torch.sum(unnormalized_advantages * pac_ratio)
+                # est_curr_performance = torch.sum(advantages * pac_ratio)
+                self.writer.add_scalar("info_alpha/est_curr_performance", est_curr_performance, self.epoch_num)
                 
                 # if current policy is too far from old policy or is worse than old policy,
                 # decrease alpha;

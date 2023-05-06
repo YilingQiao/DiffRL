@@ -1,5 +1,6 @@
 from torch import nn
 import torch
+import numpy as np
 
 def alpha_variance_loss(actions, advantages, adv_grads, model, old_mu, old_sigma, curr_mu, curr_sigma, alpha):
     
@@ -116,7 +117,10 @@ def alpha_actor_loss(old_action_log_probs_batch, action_log_probs, advantage, is
 # original actor loss;
 def actor_loss(old_action_log_probs_batch, action_log_probs, advantage, is_ppo, curr_e_clip):
     if is_ppo:
-        ratio = torch.exp(old_action_log_probs_batch - action_log_probs)
+        ratio = old_action_log_probs_batch - action_log_probs
+        ratio = torch.clamp(ratio, max=64.0)        # prevent ratio becoming [inf];
+        ratio = torch.exp(ratio)
+        
         surr1 = advantage * ratio
         surr2 = advantage * torch.clamp(ratio, 1.0 - curr_e_clip,
                                 1.0 + curr_e_clip)
@@ -136,13 +140,19 @@ def actor_loss_alpha(old_action_log_probs_batch0,
                      is_ppo, 
                      curr_e_clip):
     if is_ppo:
-        action_probs_batch0 = torch.exp(-old_action_log_probs_batch0)
-        action_probs_batch1 = torch.exp(-old_action_log_probs_batch1)
-        action_probs_batch_mid = (action_probs_batch0 + action_probs_batch1) * 0.5
-        action_log_probs_batch_mid = -torch.log(action_probs_batch_mid)
-
-        ratio = action_log_probs_batch_mid - action_log_probs
-        ratio = torch.clamp(ratio, max=16.0)        # prevent ratio becoming [inf];
+        t_ratio = old_action_log_probs_batch0 - old_action_log_probs_batch1
+        if torch.any(torch.abs(t_ratio) > 4.):
+            # ratio can be numerically unstable, just use original ppo;
+            ratio = old_action_log_probs_batch0 - action_log_probs
+        else:
+            t_ratio = torch.exp(t_ratio)
+            tmp0 = torch.log(t_ratio + 1.)
+            tmp1 = tmp0 - old_action_log_probs_batch0
+            action_log_probs_batch_mid = np.log(2.) - tmp1
+            
+            ratio = action_log_probs_batch_mid - action_log_probs
+            
+        ratio = torch.clamp(ratio, max=64.0)        # prevent ratio becoming [inf];
         ratio = torch.exp(ratio)
 
         surr1 = advantage * ratio

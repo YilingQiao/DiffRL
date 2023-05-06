@@ -94,19 +94,20 @@ params:
       # algorithm: 'grad-ppo-alpha'
 
 
-      max_alpha: 1e-1
+      max_alpha: 1e100 # 4e-2
       desired_alpha: 1e-2
-      update_factor: 1.05
+      update_factor: 1.02
       update_interval: 0.05
-      dynamic_alpha_scheduler: dynamic1
+      dynamic_alpha_scheduler: dynamic4
       max_dist_rp_lr: 0.5
 
       # THESE ARE THE REAL NETWORKS WE ARE GOING TO USE;
       network:
-        actor: ActorStochasticMLP # ActorDeterministicMLP
+        actor: GradActorStochasticMLP # ActorDeterministicMLP
         actor_mlp:
           units: [64, 64]
           activation: elu
+        fixed_sigma: False
 
         critic: CriticMLP
         critic_mlp:
@@ -118,8 +119,8 @@ params:
       # LEARNING RATE FOR RP-GRADIENT BASED ACTOR UPDATE;
       actor_learning_rate_shac: 1e-2 # 4e-2
       
-      actor_learning_rate_alpha: 1e-2
-      actor_iterations_alpha: 16
+      actor_learning_rate_alpha: 1e-5
+      actor_iterations_alpha: 128
 
       # LEARNING RATE FOR CRITIC UPDATE;
       critic_learning_rate: 1e-3
