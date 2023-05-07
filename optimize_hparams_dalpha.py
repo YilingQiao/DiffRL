@@ -158,7 +158,7 @@ def objective(trial):
     # alpha;
     alpha = trial.suggest_categorical("alpha", ["5e-1", "2e-1", "1e-1", "5e-2", "2e-2", "1e-2"])
     alpha = float(alpha)
-    # cfg_train["params"]["config"]["gi_params"]["max_alpha"] = 1e10 # alpha * 10.
+    cfg_train["params"]["config"]["gi_params"]["max_alpha"] = alpha * 10.
     # cfg_train["params"]["config"]["gi_params"]["min_alpha"] = alpha / 10.
     cfg_train["params"]["config"]["gi_params"]["desired_alpha"] = alpha
     
@@ -175,17 +175,17 @@ def objective(trial):
     cfg_train["params"]["config"]["gi_params"]["update_factor"] = update_factor
     
     # update interval;
-    # update_interval = trial.suggest_categorical("update_interval", ["0.005", "0.01", "0.02", "0.05"])
-    # update_interval = float(update_interval)
-    # cfg_train["params"]["config"]["gi_params"]["update_interval"] = update_interval
+    update_interval = trial.suggest_categorical("update_interval", ["0.05", "0.1", "0.2", "0.4"])
+    update_interval = float(update_interval)
+    cfg_train["params"]["config"]["gi_params"]["update_interval"] = update_interval
     
     # dynamic alpha scheduler;
     # dynamic_alpha_scheduler = trial.suggest_categorical("dynamic_alpha_scheduler", ["static_lr", "dynamic0", "dynamic1", "dynamic2", "dynamic3"])
     cfg_train["params"]["config"]["gi_params"]["dynamic_alpha_scheduler"] = 'dynamic4' # dynamic_alpha_scheduler
 
-    max_est_hessian_det_std = trial.suggest_categorical("max_est_hessian_det_std", ["0.05", "0.10", "0.15", "0.20"])
-    max_est_hessian_det_std = float(max_est_hessian_det_std)
-    cfg_train["params"]["config"]["gi_params"]["max_est_hessian_det_std"] = max_est_hessian_det_std
+    # max_est_hessian_det_std = trial.suggest_categorical("max_est_hessian_det_std", ["0.05", "0.10", "0.15", "0.20"])
+    # max_est_hessian_det_std = float(max_est_hessian_det_std)
+    # cfg_train["params"]["config"]["gi_params"]["max_est_hessian_det_std"] = max_est_hessian_det_std
 
     # save config
     if cfg_train['params']['general']['train']:
@@ -323,7 +323,7 @@ if __name__ == '__main__':
     args.num_envs = 0           # default;
     args.play = False           # only training;
     args.render = False         # no rendering;
-    args.logdir = f"optuna/logs/dynamic_alpha_version_8/{args.env}/"
+    args.logdir = f"optuna/logs/dynamic_alpha_version_12/{args.env}/"
     args.cfg = f"./examples/cfg/grad_ppo_alpha/{args.env}.yaml"
     args.no_time_stamp = False  # add time stamp to log files;
 
@@ -353,7 +353,7 @@ if __name__ == '__main__':
     
     optuna.logging.get_logger("optuna").addHandler(logging.StreamHandler(sys.stdout))
 
-    study_name = f"dynamic-alpha-version-8-{args.env}"  # Unique identifier of the study.
+    study_name = f"dynamic-alpha-version-12-{args.env}"  # Unique identifier of the study.
     
     if not os.path.exists("./optuna/db"):
         os.makedirs("./optuna/db")

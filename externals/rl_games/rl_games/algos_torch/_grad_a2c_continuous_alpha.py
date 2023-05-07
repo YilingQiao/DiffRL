@@ -51,6 +51,7 @@ class GradA2CAgent(A2CAgent):
         
         actor_fn = getattr(models.actor, self.actor_name)
         self.actor: torch.nn.Module = actor_fn(num_obs, num_actions, config['gi_params']['network'], device = self.ppo_device)
+        self.backup_actor = copy.deepcopy(self.actor)
         
         critic_fn = getattr(models.critic, self.critic_name)
         self.critic: torch.nn.Module = critic_fn(num_obs, config['gi_params']['network'], device = self.ppo_device)
@@ -99,7 +100,7 @@ class GradA2CAgent(A2CAgent):
         self.gi_num_step = config['gi_params']['num_step']
         self.gi_lr_schedule = config['gi_params']['lr_schedule']
         
-        self.gi_max_alpha = None # float(config['gi_params']['max_alpha'])
+        self.gi_max_alpha = float(config['gi_params']['max_alpha'])
         self.gi_min_alpha = None # 1e-15
         self.gi_desired_alpha = float(config['gi_params']['desired_alpha'])
         self.gi_curr_alpha = self.gi_desired_alpha
@@ -217,32 +218,65 @@ class GradA2CAgent(A2CAgent):
             raise NotImplementedError()
         
         if self.gi_algorithm in ['ppo-only', 'grad-ppo-shac', 'grad-ppo-alpha']:
+            
+            # backup actor and optimizer to prevent policy degradation;
+            with torch.no_grad():
+                
+                for param, param_targ in zip(self.actor.parameters(), self.backup_actor.parameters()):
+                    param_targ.data.mul_(0.)
+                    param_targ.data.add_(param.data)
+                    
+            while True:
+                
+                a_losses = []
+                c_losses = []
+                b_losses = []
+                entropies = []
+                kls = []
+            
+                for _ in range(0, self.mini_epochs_num):
 
-            for _ in range(0, self.mini_epochs_num):
+                    ep_kls = []
+                    for i in range(len(self.dataset)):
+                        a_loss, c_loss, entropy, kl, last_lr, lr_mul, cmu, csigma, b_loss = self.train_actor_critic(self.dataset[i])
+                        a_losses.append(a_loss)
+                        c_losses.append(c_loss)
+                        ep_kls.append(kl)
+                        entropies.append(entropy)
+                        if self.bounds_loss_coef is not None:
+                            b_losses.append(b_loss)
 
-                ep_kls = []
-                for i in range(len(self.dataset)):
-                    a_loss, c_loss, entropy, kl, last_lr, lr_mul, cmu, csigma, b_loss = self.train_actor_critic(self.dataset[i])
-                    a_losses.append(a_loss)
-                    c_losses.append(c_loss)
-                    ep_kls.append(kl)
-                    entropies.append(entropy)
-                    if self.bounds_loss_coef is not None:
-                        b_losses.append(b_loss)
+                        self.dataset.update_mu_sigma(cmu, csigma)   
 
-                    self.dataset.update_mu_sigma(cmu, csigma)   
+                        if self.schedule_type == 'legacy':
+                            if self.multi_gpu:
+                                kl = self.hvd.average_value(kl, 'ep_kls')
+                            self.last_lr, self.entropy_coef = self.scheduler.update(self.last_lr, self.entropy_coef, self.epoch_num, 0,kl.item())
+                            self.update_lr(self.last_lr)
 
-                    if self.schedule_type == 'legacy':
-                        if self.multi_gpu:
-                            kl = self.hvd.average_value(kl, 'ep_kls')
-                        self.last_lr, self.entropy_coef = self.scheduler.update(self.last_lr, self.entropy_coef, self.epoch_num, 0,kl.item())
-                        self.update_lr(self.last_lr)
+                    av_kls = torch_ext.mean_list(ep_kls)
 
-                av_kls = torch_ext.mean_list(ep_kls)
-
-                if self.schedule_type == 'standard':
-                    raise NotImplementedError()
-                kls.append(av_kls)
+                    if self.schedule_type == 'standard':
+                        raise NotImplementedError()
+                    kls.append(av_kls)
+                    
+                if a_losses[-1] > a_losses[0]:
+                    
+                    with torch.no_grad():
+                        
+                        # if optimization did not work well;
+                        for param, param_targ in zip(self.backup_actor.parameters(), self.actor.parameters()):
+                            param_targ.data.mul_(0.)
+                            param_targ.data.add_(param.data)
+                        
+                        for param in self.ppo_optimizer.param_groups:
+                            param['lr'] /= 1.5
+                            
+                        self.last_lr /= 1.5
+                        
+                else:
+                    break
+                    
         else:
             # placeholders;
             
@@ -572,43 +606,6 @@ class GradA2CAgent(A2CAgent):
             actor_loss_0 = np.clip(actor_loss_0, 1e-5, None)
             actor_loss_ratio = actor_loss_1 / actor_loss_0
             self.writer.add_scalar("info_alpha/actor_loss_ratio", actor_loss_ratio, self.epoch_num)
-            
-            # # find out attained alpha, which can be different from our desired alpha;
-            # # for only statistics;
-            # with torch.no_grad():
-                
-            #     _, mu, std, _ = self.actor.forward_with_dist(t_obses)
-                
-            #     distr = GradNormal(mu, std)
-            #     rpeps_actions = distr.eps_to_action(t_rp_eps)
-                
-            #     # t_adv_gradient_sign = torch.sign(t_adv_gradient)
-            #     # t_adv_gradient_sign = torch.where(t_adv_gradient_sign == 0, torch.ones_like(t_adv_gradient_sign), t_adv_gradient_sign)
-            #     # clamp_t_adv_gradient = t_adv_gradient_sign * torch.clamp(torch.abs(t_adv_gradient), min=1e-5)
-                
-            #     tmp0 = torch.sum(rpeps_actions - t_actions, dim=-1)
-            #     tmp1 = torch.sum(t_adv_gradient, dim=-1)
-            #     tmp2 = torch.sign(tmp1)
-            #     tmp2 = torch.where(tmp2 == 0, torch.ones_like(tmp2), tmp2)
-            #     tmp1 = tmp2 * torch.clamp(torch.abs(tmp1), min=1e-5)
-            #     attained_alpha = tmp0 / tmp1
-            #     # attained_alpha = attained_alpha.detach().cpu().numpy()
-                
-            #     # attained_alpha = (rpeps_actions - t_actions) / clamp_t_adv_gradient
-            #     # attained_alpha = torch.mean(attained_alpha, dim=-1)
-            #     attained_alpha, _ = torch.sort(attained_alpha)
-            #     attained_alpha = attained_alpha.detach().cpu().numpy()
-            #     # print("Attained alpha mean: {:.6f} / std: {:.6f}".format(np.mean(attained_alpha), np.std(attained_alpha)))
-                
-            #     # valid_attained_alpha_num = np.count_nonzero(np.logical_and(attained_alpha < 2.0 * self.gi_curr_alpha, attained_alpha > 0.5 * self.gi_curr_alpha))
-            #     # print("Attained alpha valid: {:.4f}".format(valid_attained_alpha_num / len(attained_alpha)))
-                
-            #     # # only use median values to cull out noises;
-            #     # attained_alpha_len = attained_alpha.shape[0] // 4
-            #     # attained_alpha = attained_alpha[attained_alpha_len:-attained_alpha_len]
-            #     attained_alpha = np.mean(attained_alpha)
-                
-            # self.writer.add_scalar("info_alpha/attained_alpha", attained_alpha, self.epoch_num)
                 
             with torch.no_grad():
             
@@ -734,22 +731,20 @@ class GradA2CAgent(A2CAgent):
                     if actor_loss_ratio > 1.:
                         # alpha does not change;
                         next_actor_lr = curr_actor_lr / self.gi_update_factor
-                        self.actor_iterations = (self.actor_iterations * self.gi_update_factor) // 1
+                        self.actor_iterations = int((self.actor_iterations * self.gi_update_factor) // 1)
                     else:
                         # actor_lr does not change;
                         
-                        if min_hessian_std > self.max_hessian_det_std:
-                            
+                        if min_est_hessian_det < min_safe_interval or \
+                            max_est_hessian_det > max_safe_interval:
+                                
                             next_alpha = curr_alpha / self.gi_update_factor
                             
                         else:
                             
-                            if min_est_hessian_det < 0.2:
-                                next_alpha = curr_alpha / self.gi_update_factor
-                            else:
-                                next_alpha = curr_alpha * self.gi_update_factor
-                    
-                    # next_alpha = np.clip(next_alpha, self.gi_min_alpha, self.gi_max_alpha)
+                            next_alpha = curr_alpha * self.gi_update_factor
+                            
+                    next_alpha = np.clip(next_alpha, self.gi_min_alpha, self.gi_max_alpha)
                     
                 else:
                     
@@ -979,8 +974,8 @@ class GradA2CAgent(A2CAgent):
                         
                 # find out if current policy is better than old policy in terms of lr gradients;
                 
-                est_curr_performance = torch.sum(unnormalized_advantages * pac_ratio)
-                # est_curr_performance = torch.sum(advantages * pac_ratio)
+                est_curr_performance = torch.sum(unnormalized_advantages * pac_ratio) - torch.sum(unnormalized_advantages)
+                # est_curr_performance = torch.sum(advantages * pac_ratio) - torch.sum(advantages)
                 self.writer.add_scalar("info_alpha/est_curr_performance", est_curr_performance, self.epoch_num)
                 
                 # if current policy is too far from old policy or is worse than old policy,
@@ -996,7 +991,7 @@ class GradA2CAgent(A2CAgent):
                 dataset_dict['mu'] = n_mus
                 dataset_dict['sigma'] = n_sigmas
                 dataset_dict['logp_actions'] = n_neglogpacs
-        
+                    
         self.dataset.update_values_dict(dataset_dict)
 
         if self.has_central_value:

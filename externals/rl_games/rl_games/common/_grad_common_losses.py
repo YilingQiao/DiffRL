@@ -133,7 +133,7 @@ def actor_loss(old_action_log_probs_batch, action_log_probs, advantage, is_ppo, 
 # actor loss for alpha-policy based grad ppo;
 # @ old_action_log_probs_batch0: neg action log probs before alpha-policy update
 # @ old_action_log_probs_batch1: neg action log probs after alpha-policy update
-def actor_loss_alpha(old_action_log_probs_batch0, 
+def  actor_loss_alpha(old_action_log_probs_batch0, 
                      old_action_log_probs_batch1,
                      action_log_probs, 
                      advantage, 
@@ -144,6 +144,7 @@ def actor_loss_alpha(old_action_log_probs_batch0,
         if torch.any(torch.abs(t_ratio) > 4.):
             # ratio can be numerically unstable, just use original ppo;
             ratio = old_action_log_probs_batch0 - action_log_probs
+            # ratio = old_action_log_probs_batch1 - action_log_probs
         else:
             t_ratio = torch.exp(t_ratio)
             tmp0 = torch.log(t_ratio + 1.)
