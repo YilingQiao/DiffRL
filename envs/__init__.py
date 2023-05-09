@@ -18,6 +18,11 @@ from envs._rosenbrock import RosenbrockEnv
 from envs._dejong import DejongEnv
 from envs._test import TestEnv
 
+from envs._ackley_64 import AckleyEnv64
+from envs._dejong_64 import DejongEnv64
+from envs._ackley_2048 import AckleyEnv2048
+from envs._dejong_2048 import DejongEnv2048
+
 from envs.traffic.pace_car.env import TrafficPaceCarEnv
 from envs.traffic.roundabout.env import TrafficRoundaboutEnv
 

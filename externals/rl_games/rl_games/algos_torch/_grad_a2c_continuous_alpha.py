@@ -13,6 +13,7 @@ from rl_games.common._grad_experience import GradExperienceBuffer
 from rl_games.algos_torch._grad_running_mean_std import GradRunningMeanStd
 from rl_games.common import _grad_common_losses
 from rl_games.algos_torch._grad_distribution import GradNormal
+from rl_games.common.schedulers import LinearScheduler, IdentityScheduler
 
 from utils.dataset import CriticDataset
 import models.actor
@@ -128,7 +129,13 @@ class GradA2CAgent(A2CAgent):
 
         self.ppo_last_lr = self.last_lr
         self.ppo_optimizer = torch.optim.Adam(self.actor.parameters(), lr=self.ppo_last_lr, eps=1e-8, weight_decay=self.weight_decay)
-
+        
+        # if it is True, we adjust ppo_last_lr adaptively until PPO loss decreases for sure;
+        self.stable_ppo = config["gi_params"]["stable_ppo"]
+        
+        self.max_optimization_iter = 8
+        self.optimizer_lr_multiplier = 1.5
+        
         # change to proper running mean std for backpropagation;
         if self.normalize_input:
             if isinstance(self.observation_space, gym.spaces.Dict):
@@ -225,8 +232,10 @@ class GradA2CAgent(A2CAgent):
                 for param, param_targ in zip(self.actor.parameters(), self.backup_actor.parameters()):
                     param_targ.data.mul_(0.)
                     param_targ.data.add_(param.data)
-                    
-            while True:
+            
+            last_lr_0 = self.last_lr
+            
+            for iter in range(self.max_optimization_iter):
                 
                 a_losses = []
                 c_losses = []
@@ -249,6 +258,9 @@ class GradA2CAgent(A2CAgent):
                         self.dataset.update_mu_sigma(cmu, csigma)   
 
                         if self.schedule_type == 'legacy':
+                            if isinstance(self.scheduler, LinearScheduler):
+                                raise NotImplementedError()
+                            
                             if self.multi_gpu:
                                 kl = self.hvd.average_value(kl, 'ep_kls')
                             self.last_lr, self.entropy_coef = self.scheduler.update(self.last_lr, self.entropy_coef, self.epoch_num, 0,kl.item())
@@ -260,7 +272,7 @@ class GradA2CAgent(A2CAgent):
                         raise NotImplementedError()
                     kls.append(av_kls)
                     
-                if a_losses[-1] > a_losses[0]:
+                if self.stable_ppo and a_losses[-1] > a_losses[0]:
                     
                     with torch.no_grad():
                         
@@ -270,11 +282,15 @@ class GradA2CAgent(A2CAgent):
                             param_targ.data.add_(param.data)
                         
                         for param in self.ppo_optimizer.param_groups:
-                            param['lr'] /= 1.5
+                            param['lr'] = last_lr_0 / self.optimizer_lr_multiplier
                             
-                        self.last_lr /= 1.5
+                        self.last_lr = last_lr_0 / self.optimizer_lr_multiplier
                         
                 else:
+                    
+                    if isinstance(self.scheduler, IdentityScheduler):
+                        self.last_lr = last_lr_0
+                        
                     break
                     
         else:
@@ -581,7 +597,7 @@ class GradA2CAgent(A2CAgent):
                     param_targ.data.mul_(0.)
                     param_targ.data.add_(param.data)
             
-            while True:
+            for iter2 in range(self.max_optimization_iter):
             
                 actor_loss_0 = None
                 actor_loss_1 = None
@@ -625,7 +641,7 @@ class GradA2CAgent(A2CAgent):
                             param_targ.data.add_(param.data)
                         
                         for param in self.actor_optimizer.param_groups:
-                            param['lr'] /= 1.5
+                            param['lr'] /= self.optimizer_lr_multiplier
                             
                 else:
                     
@@ -1105,7 +1121,8 @@ class GradA2CAgent(A2CAgent):
         entropy = torch.zeros((1,), device=self.ppo_device)
         assert self.entropy_coef == 0., ""
 
-        loss = a_loss + b_loss * self.bounds_loss_coef # 0.5 * c_loss * self.critic_coef - entropy * self.entropy_coef + b_loss * self.bounds_loss_coef
+        # we only use actor loss here for fair comparison;
+        loss = a_loss
         
         self.ppo_optimizer.zero_grad()
         if self.multi_gpu:

@@ -101,6 +101,7 @@ params:
       dynamic_alpha_scheduler: dynamic1
       max_dist_rp_lr: 0.5
       max_est_hessian_det_std: 0.05
+      stable_ppo: False
 
       # THESE ARE THE REAL NETWORKS WE ARE GOING TO USE;
       network:

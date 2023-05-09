@@ -143,8 +143,8 @@ def  actor_loss_alpha(old_action_log_probs_batch0,
         t_ratio = old_action_log_probs_batch0 - old_action_log_probs_batch1
         if torch.any(torch.abs(t_ratio) > 4.):
             # ratio can be numerically unstable, just use original ppo;
-            ratio = old_action_log_probs_batch0 - action_log_probs
-            # ratio = old_action_log_probs_batch1 - action_log_probs
+            # but use policy after RP update as importance sampling distribution;
+            ratio = old_action_log_probs_batch1 - action_log_probs
         else:
             t_ratio = torch.exp(t_ratio)
             tmp0 = torch.log(t_ratio + 1.)
@@ -153,7 +153,7 @@ def  actor_loss_alpha(old_action_log_probs_batch0,
             
             ratio = action_log_probs_batch_mid - action_log_probs
             
-        ratio = torch.clamp(ratio, max=64.0)        # prevent ratio becoming [inf];
+        ratio = torch.clamp(ratio, min=-64., max=64.)        # prevent ratio becoming [inf];
         ratio = torch.exp(ratio)
 
         surr1 = advantage * ratio
