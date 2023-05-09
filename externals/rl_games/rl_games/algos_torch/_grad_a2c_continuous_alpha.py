@@ -572,39 +572,68 @@ class GradA2CAgent(A2CAgent):
                 t_alpha_actions = t_actions + self.gi_curr_alpha * t_adv_gradient
                 
             # initialize optimizer;
-            self.actor_optimizer = torch.optim.Adam(self.actor.parameters(), lr=self.actor_lr)
+            # self.actor_optimizer = torch.optim.Adam(self.actor.parameters(), lr=self.actor_lr)
             
-            actor_loss_0 = None
-            actor_loss_1 = None
-            for iter in range(self.actor_iterations):
+            # backup actor and optimizer to prevent policy degradation;
+            with torch.no_grad():
                 
-                _, mu, std, _ = self.actor.forward_with_dist(t_obses)
-                
-                distr = GradNormal(mu, std)
-                rpeps_actions = distr.eps_to_action(t_rp_eps)
-                
-                actor_loss = (rpeps_actions - t_alpha_actions) * (rpeps_actions - t_alpha_actions) # torch.norm(rpeps_actions - t_alpha_actions, p=2, dim=-1)
-                actor_loss = torch.sum(actor_loss, dim=-1)
-                #actor_loss = torch.pow(actor_loss, 2.)      # grad scales according to error magnitude;
-                actor_loss = actor_loss.mean()
-                
-                # update actor;
-                self.actor_optimizer.zero_grad()
-                actor_loss.backward()
-                grad_norm_before_clip = tu.grad_norm(self.actor.parameters())
-                if self.truncate_grads:
-                    torch.nn.utils.clip_grad_norm_(self.actor.parameters(), self.grad_norm)    
-                grad_norm_after_clip = tu.grad_norm(self.actor.parameters()) 
-
-                self.actor_optimizer.step()
-                
-                if iter == 0:
-                    actor_loss_0 = actor_loss.detach().cpu().item()
-                elif iter == self.actor_iterations - 1:
-                    actor_loss_1 = actor_loss.detach().cpu().item()
+                for param, param_targ in zip(self.actor.parameters(), self.backup_actor.parameters()):
+                    param_targ.data.mul_(0.)
+                    param_targ.data.add_(param.data)
+            
+            while True:
+            
+                actor_loss_0 = None
+                actor_loss_1 = None
+                for iter in range(self.actor_iterations):
                     
-            actor_loss_0 = np.clip(actor_loss_0, 1e-5, None)
-            actor_loss_ratio = actor_loss_1 / actor_loss_0
+                    _, mu, std, _ = self.actor.forward_with_dist(t_obses)
+                    
+                    distr = GradNormal(mu, std)
+                    rpeps_actions = distr.eps_to_action(t_rp_eps)
+                    
+                    actor_loss = (rpeps_actions - t_alpha_actions) * (rpeps_actions - t_alpha_actions) # torch.norm(rpeps_actions - t_alpha_actions, p=2, dim=-1)
+                    actor_loss = torch.sum(actor_loss, dim=-1)
+                    #actor_loss = torch.pow(actor_loss, 2.)      # grad scales according to error magnitude;
+                    actor_loss = actor_loss.mean()
+                    
+                    # update actor;
+                    self.actor_optimizer.zero_grad()
+                    actor_loss.backward()
+                    grad_norm_before_clip = tu.grad_norm(self.actor.parameters())
+                    if self.truncate_grads:
+                        torch.nn.utils.clip_grad_norm_(self.actor.parameters(), self.grad_norm)    
+                    grad_norm_after_clip = tu.grad_norm(self.actor.parameters()) 
+
+                    self.actor_optimizer.step()
+                    
+                    if iter == 0:
+                        actor_loss_0 = actor_loss.detach().cpu().item()
+                    elif iter == self.actor_iterations - 1:
+                        actor_loss_1 = actor_loss.detach().cpu().item()
+                    
+                actor_loss_0 = np.clip(actor_loss_0, 1e-5, None)
+                actor_loss_ratio = actor_loss_1 / actor_loss_0
+                
+                if actor_loss_ratio > 1.:
+                    
+                    with torch.no_grad():
+                        
+                        # if optimization did not work well;
+                        for param, param_targ in zip(self.backup_actor.parameters(), self.actor.parameters()):
+                            param_targ.data.mul_(0.)
+                            param_targ.data.add_(param.data)
+                        
+                        for param in self.actor_optimizer.param_groups:
+                            param['lr'] /= 1.5
+                            
+                else:
+                    
+                    for param in self.actor_optimizer.param_groups:
+                        param['lr'] = self.actor_lr
+                        
+                    break
+                
             self.writer.add_scalar("info_alpha/actor_loss_ratio", actor_loss_ratio, self.epoch_num)
                 
             with torch.no_grad():

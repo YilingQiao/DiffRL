@@ -158,19 +158,19 @@ def objective(trial):
     # alpha;
     alpha = trial.suggest_categorical("alpha", ["5e-1", "2e-1", "1e-1", "5e-2", "2e-2", "1e-2"])
     alpha = float(alpha)
-    cfg_train["params"]["config"]["gi_params"]["max_alpha"] = alpha * 10.
+    cfg_train["params"]["config"]["gi_params"]["max_alpha"] = 1. # alpha * 10.
     # cfg_train["params"]["config"]["gi_params"]["min_alpha"] = alpha / 10.
     cfg_train["params"]["config"]["gi_params"]["desired_alpha"] = alpha
     
     # learning rates;
-    cfg_train["params"]["config"]["gi_params"]["actor_learning_rate_alpha"] = 1e-5
-    cfg_train["params"]["config"]["gi_params"]["actor_iterations_alpha"] = 128
-    # actor_lr = trial.suggest_categorical("actor_lr", ["1e-2", "5e-3", "2e-3", "1e-3", "5e-4", "2e-4", "1e-4"])
-    # actor_lr = float(actor_lr)
-    # cfg_train["params"]["config"]["gi_params"]["actor_learning_rate_alpha"] = actor_lr
+    # cfg_train["params"]["config"]["gi_params"]["actor_learning_rate_alpha"] = 1e-5
+    cfg_train["params"]["config"]["gi_params"]["actor_iterations_alpha"] = 16
+    actor_lr = trial.suggest_categorical("actor_lr", ["1e-2", "5e-3", "1e-3", "5e-4", "1e-4"])
+    actor_lr = float(actor_lr)
+    cfg_train["params"]["config"]["gi_params"]["actor_learning_rate_alpha"] = actor_lr
     
     # update factor;
-    update_factor = trial.suggest_categorical("update_factor", ["1.01", "1.02", "1.05", "1.1", "1.2"])
+    update_factor = trial.suggest_categorical("update_factor", ["1.01", "1.02", "1.05", "1.1"])
     update_factor = float(update_factor)
     cfg_train["params"]["config"]["gi_params"]["update_factor"] = update_factor
     
@@ -323,7 +323,7 @@ if __name__ == '__main__':
     args.num_envs = 0           # default;
     args.play = False           # only training;
     args.render = False         # no rendering;
-    args.logdir = f"optuna/logs/dynamic_alpha_version_12/{args.env}/"
+    args.logdir = f"optuna/logs/dynamic_alpha_version_13/{args.env}/"
     args.cfg = f"./examples/cfg/grad_ppo_alpha/{args.env}.yaml"
     args.no_time_stamp = False  # add time stamp to log files;
 
@@ -353,7 +353,7 @@ if __name__ == '__main__':
     
     optuna.logging.get_logger("optuna").addHandler(logging.StreamHandler(sys.stdout))
 
-    study_name = f"dynamic-alpha-version-12-{args.env}"  # Unique identifier of the study.
+    study_name = f"dynamic-alpha-version-13-{args.env}"  # Unique identifier of the study.
     
     if not os.path.exists("./optuna/db"):
         os.makedirs("./optuna/db")
